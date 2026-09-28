@@ -19,6 +19,7 @@ use crate::dialect::{LibraryClass, MethodReceiver, TestModule};
 use crate::vfs::{FsVfs, MapVfs, Vfs};
 
 use super::controller::ingest_controller;
+use super::engines::LocalEngine;
 use super::expr::ingest_ruby_program;
 use super::fixture::ingest_fixture_file;
 use super::jbuilder::ingest_jbuilder;
@@ -28,7 +29,7 @@ use super::library_class::{
     ingest_library_classes, ingest_rails_application_singleton_methods,
 };
 use super::model::ingest_model;
-use super::routes::ingest_routes_with_draws;
+use super::routes::ingest_routes_with_local_engines;
 use super::schema::{ingest_migration, ingest_schema};
 use super::test::ingest_test_files;
 use super::view::{ViewEngine, ingest_template};
@@ -192,8 +193,31 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
     if super::roda_app::is_roda_app(vfs, dir) {
         return super::roda_app::ingest_roda_app_with_vfs(vfs, dir);
     }
+    let local_engines = super::engines::discover(vfs, dir)?;
+    if local_engines.is_empty() {
+        return ingest_rails_app(vfs, dir, &local_engines);
+    }
+    let merged_vfs = super::engines::EngineVfs::new(vfs, dir, &local_engines)?;
+    let mut app = ingest_rails_app(&merged_vfs, dir, &local_engines)?;
+    crate::lower::engine_routes::normalize(&mut app);
+    Ok(app)
+}
+
+fn ingest_rails_app<V: Vfs + ?Sized>(
+    vfs: &V,
+    dir: &Path,
+    local_engines: &HashMap<String, LocalEngine>,
+) -> IngestResult<App> {
     super::sources::reset();
     let mut app = App::new();
+    app.isolated_helper_scopes = local_engines.values().filter_map(|engine| {
+        Some(crate::app::HelperScope {
+            namespace: engine.module.clone()?,
+            source_root: engine.root.display().to_string(),
+            methods: HashMap::new(),
+        })
+    }).collect();
+    app.isolated_helper_scopes.sort_by(|a, b| a.namespace.cmp(&b.namespace));
     // `enum` columns declared inside a concern's `included do`, keyed by
     // the module. Local rather than a field on `App`: they exist only
     // until the splice folds them into each including model's own
@@ -247,7 +271,7 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
                 let source = vfs.read(&entry)?;
                 unwrap_or_record(ingest_migration(
                     &source,
-                    &entry.display().to_string(),
+                    &vfs.source_path(&entry).display().to_string(),
                     &mut schema,
                 ))?;
             }
@@ -274,6 +298,11 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
         .collect();
 
     let mut table_prefixes = super::model::TablePrefixes::new();
+    for engine in local_engines.values() {
+        if let (Some(namespace), Some(prefix)) = (&engine.module, &engine.table_prefix) {
+            table_prefixes.insert(namespace.clone(), prefix.clone());
+        }
+    }
     // The same pre-pass answers a second question: which classes are
     // ActiveRecord bases. A model descending through the app's own
     // abstract base was classified a library class and lost its DSL,
@@ -284,8 +313,10 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
     if vfs.is_dir(&models_dir) {
         for entry in read_rb_files(vfs, &models_dir)? {
             let source = vfs.read(&entry)?;
-            table_prefixes
-                .extend(super::model::ingest_table_name_prefixes(&source, &entry.display().to_string()));
+            table_prefixes.extend(super::model::ingest_table_name_prefixes(
+                &source,
+                &vfs.source_path(&entry).display().to_string(),
+            ));
             model_bases.record(&source, &mut base_pairs);
         }
     }
@@ -303,7 +334,7 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
             let Ok(source) = vfs.read(&entry) else { continue };
             table_prefixes.extend(super::model::ingest_table_name_prefixes(
                 &source,
-                &entry.display().to_string(),
+                &vfs.source_path(&entry).display().to_string(),
             ));
             model_bases.record(&source, &mut base_pairs);
         }
@@ -312,7 +343,7 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
     if vfs.is_dir(&models_dir) {
         for entry in read_rb_files(vfs, &models_dir)? {
             let source = vfs.read(&entry)?;
-            let path_str = entry.display().to_string();
+            let path_str = vfs.source_path(&entry).display().to_string();
             match classify_class_file(&source, &model_bases) {
                 Some(ClassKind::Model) | None => {
                     if let Some(maybe_model) =
@@ -426,7 +457,7 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
                 continue;
             }
             let Ok(source) = vfs.read(&entry) else { continue };
-            let path_str = entry.display().to_string();
+            let path_str = vfs.source_path(&entry).display().to_string();
             // An ActiveRecord class is one wherever it lives. A
             // packwerk package under `lib/`, or an engine's models
             // reached through an autoload path, used to land here as
@@ -489,7 +520,7 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
         if let Ok(entries) = read_rb_files(vfs, &helpers_dir) {
             for entry in entries {
                 let Ok(source) = vfs.read(&entry) else { continue };
-                let path_str = entry.display().to_string();
+                let path_str = vfs.source_path(&entry).display().to_string();
                 // Rails mixes in only the files whose NAME says helper:
                 // `all_helpers_from_path` globs `**/*_helper.rb` and
                 // nothing else. Everything else under app/helpers is
@@ -511,6 +542,11 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
                 match ingest_library_classes(&source, &path_str) {
                     Ok(classes) => {
                         for lc in classes.iter().filter(|_| is_helper_module) {
+                            let scope = app.helper_scope_at(lc.name.0.as_str(), Some(Path::new(&path_str)));
+                            let index = match scope {
+                                Some(scope) => &mut app.isolated_helper_scopes[scope].methods,
+                                None => &mut app.helper_method_index,
+                            };
                             // Rails resolves a helper's `include`d
                             // modules into the same view surface —
                             // lobsters' ApplicationHelper includes
@@ -537,13 +573,11 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
                                     continue;
                                 };
                                 for m in &target.methods {
-                                    app.helper_method_index
-                                        .insert(m.name.clone(), target.name.clone());
+                                    index.insert(m.name.clone(), target.name.clone());
                                 }
                             }
                             for m in &lc.methods {
-                                app.helper_method_index
-                                    .insert(m.name.clone(), lc.name.clone());
+                                index.insert(m.name.clone(), lc.name.clone());
                             }
                         }
                         app.library_classes.extend(classes);
@@ -750,7 +784,7 @@ end
             if vfs.is_dir(&init_dir) {
                 for entry in read_rb_files(vfs, &init_dir)? {
                     if let Ok(bytes) = vfs.read(&entry) {
-                        sources.push((entry.display().to_string(), bytes));
+                        sources.push((vfs.source_path(&entry).display().to_string(), bytes));
                     }
                 }
             }
@@ -890,7 +924,7 @@ end
         if vfs.is_dir(&init_dir) {
             for entry in read_rb_files(vfs, &init_dir)? {
                 let Ok(bytes) = vfs.read(&entry) else { continue };
-                let path_str = entry.display().to_string();
+                let path_str = vfs.source_path(&entry).display().to_string();
                 for (name, source) in extract_time_formats(&bytes, &path_str) {
                     let format = match source {
                         TimeFormatSource::Strftime(format) => {
@@ -943,7 +977,7 @@ end
     if vfs.is_dir(&controllers_dir) {
         for entry in read_rb_files(vfs, &controllers_dir)? {
             let source = vfs.read(&entry)?;
-            let path_str = entry.display().to_string();
+            let path_str = vfs.source_path(&entry).display().to_string();
             if let Some(maybe_controller) =
                 unwrap_or_record(ingest_controller(&source, &path_str))?
             {
@@ -956,10 +990,15 @@ end
                     // lowering synthesizes. Registered before the
                     // app/helpers pass below, so a same-named helper-
                     // module function wins (its insert overwrites).
+                    let scope = app.helper_scope_at(controller.name.0.as_str(), Some(Path::new(&path_str)));
+                    let index = match scope {
+                        Some(scope) => &mut app.isolated_helper_scopes[scope].methods,
+                        None => &mut app.helper_method_index,
+                    };
                     for name in crate::lower::controller_to_library::controller_helper_method_names(
                         &controller,
                     ) {
-                        app.helper_method_index.insert(name, controller.name.clone());
+                        index.insert(name, controller.name.clone());
                     }
                     // `helper_method :platform` written directly in a
                     // controller class body — the concern spelling is
@@ -1010,22 +1049,12 @@ end
         // `draw(:name)` split files — Rails loads
         // `config/routes/<name>.rb` into the same DSL context, and
         // Mastodon-class apps keep most of their route table there.
-        let mut draw_files: HashMap<String, (Vec<u8>, String)> = HashMap::new();
-        let routes_dir = dir.join("config/routes");
-        if vfs.is_dir(&routes_dir) {
-            for entry in read_rb_files(vfs, &routes_dir)? {
-                let Some(stem) = entry.file_stem().and_then(|s| s.to_str()) else {
-                    continue;
-                };
-                let split_source = vfs.read(&entry)?;
-                draw_files
-                    .insert(stem.to_string(), (split_source, entry.display().to_string()));
-            }
-        }
-        if let Some(routes) = unwrap_or_record(ingest_routes_with_draws(
+        let draw_files = super::engines::read_draws(vfs, dir)?;
+        if let Some(routes) = unwrap_or_record(ingest_routes_with_local_engines(
             &source,
             &routes_path.display().to_string(),
             &draw_files,
+            local_engines,
         ))? {
             // `to: redirect("/x")` routes point at actions nobody
             // wrote, so write them: one controller, one action per
@@ -1047,13 +1076,13 @@ end
             let rel = erb_path
                 .strip_prefix(&views_dir)
                 .map_err(|_| IngestError::Unsupported {
-                    file: erb_path.display().to_string(),
+                    file: vfs.source_path(&erb_path).display().to_string(),
                     message: "view path outside views dir".into(),
                 })?;
             if let Some(view) = unwrap_or_record(ingest_template(
                 &source,
                 rel,
-                &erb_path.display().to_string(),
+                &vfs.source_path(&erb_path).display().to_string(),
                 engine.compile_fn(),
             ))? {
                 app.views.push(view);
@@ -1066,13 +1095,13 @@ end
             let rel = jb_path
                 .strip_prefix(&views_dir)
                 .map_err(|_| IngestError::Unsupported {
-                    file: jb_path.display().to_string(),
+                    file: vfs.source_path(&jb_path).display().to_string(),
                     message: "view path outside views dir".into(),
                 })?;
             if let Some(view) = unwrap_or_record(ingest_jbuilder(
                 &source,
                 rel,
-                &jb_path.display().to_string(),
+                &vfs.source_path(&jb_path).display().to_string(),
             ))? {
                 app.views.push(view);
             }
@@ -1098,7 +1127,7 @@ end
             let source = vfs.read(&helper_rb)?;
             unwrap_or_record(super::test::ingest_test_case_setup(
                 &source,
-                &helper_rb.display().to_string(),
+                &vfs.source_path(&helper_rb).display().to_string(),
             ))?
             .flatten()
         } else {
@@ -1126,7 +1155,7 @@ end
             for entry in read_rb_files(vfs, &tests_dir)? {
                 let source = vfs.read(&entry)?;
                 if let Some(tms) =
-                    unwrap_or_record(ingest_test_files(&source, &entry.display().to_string()))?
+                    unwrap_or_record(ingest_test_files(&source, &vfs.source_path(&entry).display().to_string()))?
                 {
                     for mut tm in tms {
                         splice_test_helpers(&mut tm, &shared_test_helpers);
@@ -1289,7 +1318,7 @@ end
                     continue;
                 }
                 let source = vfs.read_to_string(&entry)?;
-                let path_str = entry.display().to_string();
+                let path_str = vfs.source_path(&entry).display().to_string();
                 let parsed = crate::rbs::parse_app_signatures(&source).map_err(|message| {
                     IngestError::Parse {
                         file: path_str.clone(),
@@ -3493,7 +3522,7 @@ fn lib_dir_is_explicitly_required<V: Vfs + ?Sized>(vfs: &V, dir: &Path, subdir: 
     let Ok(entries) = read_rb_files(vfs, &init_dir) else { return false };
     for entry in entries {
         let Ok(bytes) = vfs.read(&entry) else { continue };
-        let file = entry.display().to_string();
+        let file = vfs.source_path(&entry).display().to_string();
         let result = super::prism::parse(&bytes, &file);
         let src = String::from_utf8_lossy(&bytes).into_owned();
         let root = result.node();
@@ -3872,7 +3901,7 @@ fn content_helper_attribute_additions<V: Vfs + ?Sized>(vfs: &V, dir: &Path, app:
     }
     for entry in files {
         let Ok(bytes) = vfs.read(&entry) else { continue };
-        let file = entry.display().to_string();
+        let file = vfs.source_path(&entry).display().to_string();
         let result = super::prism::parse(&bytes, &file);
         let src = String::from_utf8_lossy(&bytes).into_owned();
         let root = result.node();
@@ -4388,7 +4417,7 @@ fn ingest_test_helper_modules<V: Vfs + ?Sized>(
         let source = vfs.read(&helper_rb)?;
         if let Some(classes) = unwrap_or_record(ingest_library_classes(
             &source,
-            &helper_rb.display().to_string(),
+            &vfs.source_path(&helper_rb).display().to_string(),
         ))? {
             for lc in classes {
                 wanted.extend(lc.includes.iter().map(|c| c.0.clone()));
@@ -4403,7 +4432,7 @@ fn ingest_test_helper_modules<V: Vfs + ?Sized>(
     for entry in read_rb_files(vfs, &helpers_dir)? {
         let source = vfs.read(&entry)?;
         let Some(classes) =
-            unwrap_or_record(ingest_library_classes(&source, &entry.display().to_string()))?
+            unwrap_or_record(ingest_library_classes(&source, &vfs.source_path(&entry).display().to_string()))?
         else {
             continue;
         };

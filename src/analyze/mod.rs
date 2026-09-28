@@ -692,7 +692,8 @@ impl Analyzer {
         // derived once here (via `registry::routes`) and shared with the
         // controller and library-class registrations below.
         let route_helper_names: Vec<String> = registry::routes::route_helper_names(app);
-        registry::view::register(&mut classes, app, &route_helper_names);
+        registry::routes::register(&mut classes, &route_helper_names);
+        registry::view::register(&mut classes, &route_helper_names);
 
         // Rails/Time/Date singletons, Ruby stdlib singletons, and the
         // gem-ecosystem catalog fold — see `registry::stdlib`.
@@ -704,6 +705,7 @@ impl Analyzer {
         // `registry::controllers`. Runs after view::register because the
         // Devise fold also augments ActionView::Base.
         registry::controllers::register(&mut classes, app, &route_helper_names);
+        registry::view::register_helper_contexts(&mut classes, app);
 
         // User-authored RBS sidecars. Signatures discovered under
         // `sig/**/*.rbs` at ingest time apply on top of the hardcoded
@@ -845,7 +847,7 @@ impl Analyzer {
         // else renders that partial. Harvested only now, off converged
         // bodies, and only where no view site already said something.
         let helper_modules: std::collections::HashSet<ClassId> =
-            app.helper_method_index.values().cloned().collect();
+            app.helper_method_indices().flat_map(|index| index.values().cloned()).collect();
         let mut helper_sites: HashMap<Symbol, HashMap<Symbol, Ty>> = HashMap::new();
         for lc in app.library_classes.iter().filter(|lc| helper_modules.contains(&lc.name)) {
             for m in &lc.methods {
@@ -2726,6 +2728,9 @@ impl Analyzer {
         // Renderer → partials-it-renders edges, harvested as views are
         // walked. Drives the ivar propagation below.
         let mut render_edges: HashMap<Symbol, Vec<Symbol>> = HashMap::new();
+        let view_contexts: HashMap<_, _> = app.views.iter().map(|view| {
+            (view.name.clone(), app.view_context_id(view.name.as_str(), view.body.span))
+        }).collect();
 
         // Phase 3a: non-partial views (action views + layouts). Analyze with
         // the controller→view ivar seed, then walk the body to record every
@@ -2739,7 +2744,7 @@ impl Analyzer {
             // The view body types against the ActionView context, so
             // implicit-self helper calls (`form_with`, …) dispatch there.
             view_ctx.self_ty = Some(Ty::Class {
-                id: ClassId(Symbol::from("ActionView::Base")),
+                id: view_contexts[&view.name].clone(),
                 args: vec![],
             });
             view_ctx.constants = global_constants.clone();
@@ -2911,7 +2916,7 @@ impl Analyzer {
             // The view body types against the ActionView context, so
             // implicit-self helper calls (`form_with`, …) dispatch there.
             view_ctx.self_ty = Some(Ty::Class {
-                id: ClassId(Symbol::from("ActionView::Base")),
+                id: view_contexts[&view.name].clone(),
                 args: vec![],
             });
             view_ctx.constants = global_constants.clone();
@@ -3148,26 +3153,7 @@ impl Analyzer {
     /// body is `Ty::Var` (no information gained).
     fn harvest_returns_to_registry(&mut self, app: &App) {
         self.harvest_method_returns(app);
-        // Rails' `helper_method :name` makes a controller (or concern)
-        // method callable from templates. The names were ingested from
-        // both spellings (`App::view_visible_controller_methods`); the
-        // TYPES are the methods' harvested returns, copied onto the view
-        // context each round so a template's `authenticated?` resolves
-        // — the authentication generator's shape, in every Rails 8 app.
-        let view_ctx = ClassId(Symbol::from("ActionView::Base"));
-        for name in &app.view_visible_controller_methods {
-            let owners = app
-                .controllers
-                .iter()
-                .map(|c| &c.name)
-                .chain(app.library_classes.iter().map(|lc| &lc.name));
-            let ty = owners
-                .filter_map(|cid| self.classes.get(cid))
-                .find_map(|c| c.instance_methods.get(name).cloned());
-            if let Some(ty) = ty {
-                self.classes.entry(view_ctx.clone()).or_default().instance_methods.insert(name.clone(), ty);
-            }
-        }
+        registry::view::refresh_controller_helpers(&mut self.classes, app);
     }
 
     fn harvest_method_returns(&mut self, app: &App) {
@@ -3663,7 +3649,9 @@ impl Analyzer {
             }
         }
         for view in &app.views {
-            self.collect_send_sites(&view.body, None, helpers, &mut sites);
+            self.collect_send_sites(
+                &view.body, None, app.helper_methods_for(view.name.as_str(), view.body.span), &mut sites,
+            );
         }
         if let Some(seeds) = &app.seeds {
             self.collect_send_sites(seeds, None, helpers, &mut sites);

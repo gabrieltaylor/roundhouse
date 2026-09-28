@@ -15,6 +15,8 @@
 //! — only the downstream rendering differs (Go: `ArticlesPath`,
 //! Python: `articles_path`, Rust: `articles_path(i64)`, etc.).
 
+use std::collections::HashMap;
+
 use crate::App;
 use crate::dialect::{HttpMethod, ResourceScope, RouteSpec};
 use crate::ident::{ClassId, Symbol};
@@ -84,6 +86,39 @@ pub struct FlatRoute {
     pub constraints: Vec<(String, String)>,
 }
 
+#[derive(Clone, Debug)]
+pub(crate) struct RouteHelper {
+    pub as_name: String,
+    pub path: String,
+    pub path_params: Vec<String>,
+    pub required_params: usize,
+    pub param_defaults: Vec<(String, String)>,
+    pub controller: Option<ClassId>,
+}
+
+impl From<FlatRoute> for RouteHelper {
+    fn from(route: FlatRoute) -> Self {
+        Self {
+            as_name: route.as_name,
+            path: route.path,
+            path_params: route.path_params,
+            required_params: route.required_params,
+            param_defaults: route.param_defaults,
+            controller: Some(route.controller),
+        }
+    }
+}
+
+pub(crate) fn route_helpers(app: &App) -> Vec<RouteHelper> {
+    let (routes, mounts) = flatten_with_mounts(app);
+    routes
+        .into_iter()
+        .filter(|route| route.named)
+        .map(RouteHelper::from)
+        .chain(mounts.into_iter().map(|mount| mount.mount_point))
+        .collect()
+}
+
 /// Is this constraint regex a plain digit class (`\d+` / `[0-9]+`,
 /// optionally `\A…\z` / `^…$` anchored)? Those are the only
 /// constraints the regex-free runtime router can enforce; anything
@@ -147,8 +182,8 @@ pub fn standard_resource_actions() -> &'static [(&'static str, HttpMethod, &'sta
 /// describe the same path template.
 pub fn helper_id_segments(app: &App) -> std::collections::HashMap<String, Vec<bool>> {
     let mut out: std::collections::HashMap<String, Vec<bool>> = std::collections::HashMap::new();
-    for r in flatten_routes(app) {
-        if !r.named || r.as_name.is_empty() {
+    for r in route_helpers(app) {
+        if r.as_name.is_empty() {
             continue;
         }
         let shape: Vec<bool> = r
@@ -162,12 +197,26 @@ pub fn helper_id_segments(app: &App) -> std::collections::HashMap<String, Vec<bo
 }
 
 pub fn flatten_routes(app: &App) -> Vec<FlatRoute> {
+    flatten_with_mounts(app).0
+}
+
+/// Local helper names and their globally unique compiled names. Shared by
+/// route generation and the source-local engine helper normalization pass.
+pub(super) struct MountedHelpers {
+    pub(super) source_root: String,
+    pub(super) namespace: Option<String>,
+    pub(super) proxy: String,
+    pub(super) names: HashMap<String, String>,
+    mount_point: RouteHelper,
+}
+
+pub(super) fn flatten_with_mounts(app: &App) -> (Vec<FlatRoute>, Vec<MountedHelpers>) {
     let mut out = Vec::new();
-    let ctx = Ctx::default();
+    let mut mounts = Vec::new();
     for entry in &app.routes.entries {
-        collect_flat_routes(entry, &mut out, &ctx);
+        collect_flat_routes(entry, &mut out, &Ctx::default(), &mut mounts);
     }
-    out
+    (out, mounts)
 }
 
 /// Accumulated flattening context: the namespace/scope facets from
@@ -286,7 +335,12 @@ fn singular_resource_actions() -> &'static [(&'static str, HttpMethod, &'static 
     ]
 }
 
-fn collect_flat_routes(spec: &RouteSpec, out: &mut Vec<FlatRoute>, ctx: &Ctx) {
+fn collect_flat_routes(
+    spec: &RouteSpec,
+    out: &mut Vec<FlatRoute>,
+    ctx: &Ctx,
+    mounts: &mut Vec<MountedHelpers>,
+) {
     match spec {
         RouteSpec::Explicit { method, path, controller, action, as_name, scope, constraints } => {
             // `:format => "rss"` rides the constraints map at ingest
@@ -664,8 +718,94 @@ fn collect_flat_routes(spec: &RouteSpec, out: &mut Vec<FlatRoute>, ctx: &Ctx) {
                 ..ctx.clone()
             };
             for child in nested {
-                collect_flat_routes(child, out, &child_ctx);
+                collect_flat_routes(child, out, &child_ctx, mounts);
             }
+        }
+        RouteSpec::Mount {
+            path,
+            as_prefix,
+            module,
+            source_root,
+            entries,
+        } => {
+            let (parents_path, _) = nest_path("", &ctx.parents, ResourceScope::Nested);
+            let prefix = join_mount_path(
+                &prefix_path(&ctx.ns_path, parents_path.trim_end_matches('/')),
+                path,
+            );
+            let proxy = format!("{}{}{as_prefix}", ctx.name_prefix, ctx.parent_name_prefix());
+            let engine_ctx = Ctx {
+                module_prefix: module
+                    .as_ref()
+                    .map(|m| format!("{m}::"))
+                    .unwrap_or_default(),
+                ..Ctx::default()
+            };
+            let mut routes = Vec::new();
+            let mut nested_mounts = Vec::new();
+            for entry in entries {
+                collect_flat_routes(entry, &mut routes, &engine_ctx, &mut nested_mounts);
+            }
+            let mut names = HashMap::new();
+            let mut path_params = Vec::new();
+            extract_path_params(&prefix, &mut path_params);
+            let mount_point = RouteHelper {
+                as_name: proxy.clone(),
+                path: prefix.clone(),
+                required_params: path_params.len(),
+                param_defaults: defaults_for(ctx, &path_params),
+                path_params,
+                controller: None,
+            };
+            for nested in &mut nested_mounts {
+                let local = nested.mount_point.as_name.clone();
+                nested.mount_point.as_name = format!("{proxy}_{local}");
+                names.insert(local, nested.mount_point.as_name.clone());
+                nested.mount_point.path = join_mount_path(&prefix, &nested.mount_point.path);
+                nested.mount_point.required_params += mount_point.path_params.len();
+                nested.mount_point.path_params.splice(
+                    0..0, mount_point.path_params.iter().cloned(),
+                );
+                for default in &mount_point.param_defaults {
+                    if !nested.mount_point.param_defaults.iter().any(|(name, _)| name == &default.0) {
+                        nested.mount_point.param_defaults.push(default.clone());
+                    }
+                }
+                for name in nested.names.values_mut() {
+                    *name = format!("{proxy}_{name}");
+                }
+            }
+            for mut route in routes {
+                if route.named {
+                    let qualified = format!("{proxy}_{}", route.as_name);
+                    let local = std::mem::replace(&mut route.as_name, qualified.clone());
+                    names.insert(local, qualified);
+                }
+                route.path = join_mount_path(&prefix, &route.path);
+                let mut params = Vec::new();
+                extract_path_params(&prefix, &mut params);
+                route.required_params += params.len();
+                params.extend(route.path_params);
+                route.path_params = params;
+                for default in defaults_for(ctx, &route.path_params) {
+                    if !route
+                        .param_defaults
+                        .iter()
+                        .any(|(name, _)| name == &default.0)
+                    {
+                        route.param_defaults.push(default);
+                    }
+                }
+                out.push(route);
+            }
+            mounts.push(MountedHelpers {
+                source_root: source_root.clone(),
+                namespace: module.clone(),
+                proxy: proxy.clone(),
+                names,
+                mount_point,
+            });
+            mounts.extend(nested_mounts);
         }
         RouteSpec::Scope { path, module, as_prefix, defaults, nest, entries } => {
             let mut child = ctx.clone();
@@ -728,7 +868,7 @@ fn collect_flat_routes(spec: &RouteSpec, out: &mut Vec<FlatRoute>, ctx: &Ctx) {
                 child.param_defaults.push((name, v.clone()));
             }
             for entry in entries {
-                collect_flat_routes(entry, out, &child);
+                collect_flat_routes(entry, out, &child, mounts);
             }
         }
     }
@@ -743,6 +883,15 @@ fn defaults_for(ctx: &Ctx, params: &[String]) -> Vec<(String, String)> {
         .filter(|(n, _)| params.iter().any(|p| p == n))
         .cloned()
         .collect()
+}
+
+fn join_mount_path(prefix: &str, path: &str) -> String {
+    let joined = prefix_path(prefix.trim_end_matches('/'), path.trim_matches('/'));
+    if joined.is_empty() {
+        "/".into()
+    } else {
+        joined
+    }
 }
 
 /// Prepend the accumulated namespace path. Both sides are `/`-rooted

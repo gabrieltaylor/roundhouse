@@ -60,7 +60,7 @@
 //! silently wrong, and no corpus app writes one on an app route.
 //! Ledgered in `docs/pipeline/runtime.md`.
 //!
-//! Scope, and ordering: bare `*_path` / `*_url` calls whose name
+//! Scope, and ordering: bare or explicit `RouteHelpers` calls whose name
 //! matches a route in the app's own table, rewritten before
 //! `lower_routes_to_library_functions` surveys those same call sites.
 //! `rails_blob_path(…, only_path: true)` is an ActiveStorage helper
@@ -91,11 +91,11 @@ pub(crate) const HOST_ONLY_OPTIONS: &[&str] = &[
 ];
 
 pub fn apply_route_url_options_lowering(app: &mut App) {
-    let helpers = super::route_format_suffix::route_helper_names(app);
+    let params = helper_path_params(app);
+    let helpers = params.keys().cloned().collect::<std::collections::HashSet<_>>();
     if helpers.is_empty() {
         return;
     }
-    let params = helper_path_params(app);
     super::for_each_hook_body(app, &mut |e| position_path_params(e, &params));
     for view in &mut app.views {
         position_path_params(&mut view.body, &params);
@@ -103,6 +103,10 @@ pub fn apply_route_url_options_lowering(app: &mut App) {
     super::for_each_hook_body(app, &mut |e| rewrite(e, &helpers));
     for view in &mut app.views {
         rewrite(&mut view.body, &helpers);
+    }
+    for helper in &mut app.routes.direct_helpers {
+        position_path_params(&mut helper.body, &params);
+        rewrite(&mut helper.body, &helpers);
     }
     // `for_each_hook_body` does not reach test bodies, and the call
     // site this pass exists for is one — campfire's
@@ -126,15 +130,20 @@ pub fn apply_route_url_options_lowering(app: &mut App) {
 /// the generator builds takes every slot.
 fn helper_path_params(app: &App) -> std::collections::HashMap<String, Vec<String>> {
     let mut out: std::collections::HashMap<String, Vec<String>> = Default::default();
-    for route in super::routes::flatten_routes(app) {
-        if !route.named {
-            continue;
-        }
+    for route in super::routes::route_helpers(app) {
         for suffix in ["_path", "_url"] {
             let slot = out.entry(format!("{}{suffix}", route.as_name)).or_default();
             if route.path_params.len() > slot.len() {
                 *slot = route.path_params.clone();
             }
+        }
+    }
+    let declared = out.keys().filter(|name| name.ends_with("_path")).cloned().collect();
+    for (variant, (base, _)) in super::routes_to_library::format_variant_demand(app, &declared) {
+        if let Some(params) = out.get(&format!("{base}_path")).cloned() {
+            let stem = variant.strip_suffix("_path").expect("format variant path helper");
+            out.insert(format!("{stem}_url"), params.clone());
+            out.insert(variant, params);
         }
     }
     out
@@ -154,9 +163,12 @@ fn position_path_params(
 ) {
     expr.node.for_each_child_mut(&mut |c| position_path_params(c, params));
     let span = expr.span;
-    let ExprNode::Send { recv: None, method, args, block: None, .. } = &mut *expr.node else {
+    let ExprNode::Send { recv, method, args, block: None, .. } = &mut *expr.node else {
         return;
     };
+    if !super::route_helper_receiver::is_helper_receiver(recv) {
+        return;
+    }
     let Some(names) = params.get(method.as_str()) else { return };
     let Some(last) = args.last() else { return };
     if let Some(spread) = spread_options_local(last, args.len() - 1, names) {
@@ -242,21 +254,18 @@ fn rewrite(expr: &mut Expr, helpers: &std::collections::HashSet<String>) {
     };
     let span = expr.span;
     let node = std::mem::replace(&mut *expr.node, ExprNode::Seq { exprs: vec![] });
-    let ExprNode::Send { args, parenthesized, .. } = node else { unreachable!() };
-    // A BARE `<stem>_path` send, not a qualified one: the demand survey
-    // reads these call sites for query keys and the `RouteHelpers.`
-    // receiver goes on afterwards, so qualifying here would hide the
-    // call from both.
-    let path_call = Expr::new(
+    let ExprNode::Send { recv, args, parenthesized, .. } = node else { unreachable!() };
+    let mut path_call = Expr::new(
         span,
         ExprNode::Send {
-            recv: None,
+            recv,
             method: Symbol::from(format!("{stem}_path")),
             args,
             block: None,
             parenthesized,
         },
     );
+    path_call.ty = expr.ty.clone().or(Some(crate::ty::Ty::Str));
     // `protocol:` rides bare (`"https"`), the convention
     // `rewrite_url_helpers_absolute` already set — Rails'
     // `normalize_protocol` accepts `"https"` and `"https://"` alike and
@@ -281,8 +290,8 @@ fn rewrite(expr: &mut Expr, helpers: &std::collections::HashSet<String>) {
 /// took two of campfire's logo tests). `format:` is not here: the
 /// suffix pass ran first and consumed it.
 fn ground_symbol_query_values(expr: &mut Expr, helpers: &std::collections::HashSet<String>) {
-    let ExprNode::Send { recv: None, method, args, .. } = &mut *expr.node else { return };
-    if !helpers.contains(method.as_str()) {
+    let ExprNode::Send { recv, method, args, .. } = &mut *expr.node else { return };
+    if !super::route_helper_receiver::is_helper_receiver(recv) || !helpers.contains(method.as_str()) {
         return;
     }
     let Some(last) = args.last_mut() else { return };
@@ -296,45 +305,47 @@ fn ground_symbol_query_values(expr: &mut Expr, helpers: &std::collections::HashS
     }
 }
 
-/// Remove every [`HOST_ONLY_OPTIONS`] key from one route-helper call's
-/// trailing kwargs hash.
-///
-/// Answers `Some((stem, host, protocol))` for the one case where the
-/// removal is not the whole story: a `_url` spelling that named a
-/// `host:` and did not ask for `only_path`. Its caller rebuilds that
-/// into `"<protocol>://<host><stem>_path(…)"`. Every other call —
-/// `_path`, a hostless `_url`, `x_url(only_path: true)` — is finished
-/// by the strip alone and answers None.
 fn strip_host_options(
     expr: &mut Expr,
     helpers: &std::collections::HashSet<String>,
 ) -> Option<(String, Expr, Option<Expr>)> {
-    let ExprNode::Send { recv: None, method, args, block: None, .. } = &mut *expr.node else {
+    let ExprNode::Send { recv, method, args, block: None, .. } = &mut *expr.node else {
         return None;
     };
-    if !helpers.contains(method.as_str()) {
+    if !super::route_helper_receiver::is_helper_receiver(recv) || !helpers.contains(method.as_str()) {
         return None;
     }
-    let last = args.last_mut()?;
-    let ExprNode::Hash { entries, kwargs: true } = &mut *last.node else {
+    let options = take_host_options(args);
+    let stem = method.as_str().strip_suffix("_url")?;
+    if options.only_path {
+        *method = Symbol::from(format!("{stem}_path"));
         return None;
+    }
+    let host = options.host.or_else(|| recv.is_some().then(|| default_host(expr.span)))?;
+    Some((stem.to_string(), host, options.protocol))
+}
+
+#[derive(Default)]
+struct HostOptions {
+    host: Option<Expr>,
+    protocol: Option<Expr>,
+    only_path: bool,
+}
+
+fn take_host_options(args: &mut Vec<Expr>) -> HostOptions {
+    let mut options = HostOptions::default();
+    let Some(ExprNode::Hash { entries, kwargs: true }) = args.last_mut().map(|arg| &mut *arg.node) else {
+        return options;
     };
-    // Read the two that BUILD a host before dropping them: on the `_url`
-    // spelling they are not dropped at all — they ARE the host half, and
-    // this is the last place that knows the caller named one.
-    let mut host: Option<Expr> = None;
-    let mut protocol: Option<Expr> = None;
-    let mut only_path = false;
     for (k, v) in entries.iter() {
         let ExprNode::Lit { value: Literal::Sym { value } } = &*k.node else {
             continue;
         };
         match value.as_str() {
-            "host" => host = Some(v.clone()),
-            "protocol" => protocol = Some(v.clone()),
+            "host" => options.host = Some(v.clone()),
+            "protocol" => options.protocol = Some(v.clone()),
             "only_path" => {
-                only_path =
-                    matches!(&*v.node, ExprNode::Lit { value: Literal::Bool { value: true } });
+                options.only_path = matches!(&*v.node, ExprNode::Lit { value: Literal::Bool { value: true } });
             }
             _ => {}
         }
@@ -343,29 +354,16 @@ fn strip_host_options(
         !matches!(&*k.node, ExprNode::Lit { value: Literal::Sym { value } }
             if HOST_ONLY_OPTIONS.contains(&value.as_str()))
     });
-    // A hash that held ONLY host options is gone entirely, so the call
-    // reaches a helper that grew no parameter for them; one that also
-    // carried query keys keeps them. The same disposal
-    // `route_format_suffix` makes, for the same reason.
     if entries.is_empty() {
         args.pop();
     }
-    // `_path` is done: the seven describe a host it does not render.
-    let stem = method.as_str().strip_suffix("_url")?;
-    // `x_url(…, only_path: true)` is Rails asking the URL spelling for
-    // a path, which is the `_path` helper — the strip above already
-    // made it one.
-    if only_path {
-        return None;
-    }
-    // `x_url(…, host: h)` names the host EXPLICITLY, and dropping it
-    // would be the second half of the campfire bug rather than its fix:
-    // the copy-link button that assertion compares against holds an
-    // ABSOLUTE URL. The view lowerer already grounds a hostless `_url`
-    // as `"http://#{Rails.application.domain}#{…_path}"`; this is that
-    // shape with the caller's host in place of the default, and it is
-    // what `emit::ruby::library::rewrite_url_helpers_absolute` builds
-    // for the explicit `…routes.url_helpers.x_url(…, host:)` chain.
-    // Two spellings, one rendering.
-    Some((stem.to_string(), host?, protocol))
+    options
+}
+
+fn default_host(span: crate::span::Span) -> Expr {
+    let rails = super::controller_to_library::rewrites::const_path(&["Rails"], span);
+    let send = |recv, method| Expr::new(span, ExprNode::Send {
+        recv: Some(recv), method: Symbol::from(method), args: vec![], block: None, parenthesized: false,
+    });
+    send(send(rails, "application"), "domain")
 }

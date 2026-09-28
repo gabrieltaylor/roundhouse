@@ -5,8 +5,8 @@
 //! wasm), the source tree arrives as JSON and lives in memory. This trait
 //! lets the same ingest pipeline drive both shapes.
 //!
-//! The trait surface is intentionally tiny — only the five operations the
-//! ingester actually needs.
+//! The trait surface is intentionally tiny — only the operations and
+//! source-location lookup the ingester actually needs.
 //!
 //! Directories are derived from file paths: a path is "a directory" iff
 //! some other path starts with it. There's no separate directory entry.
@@ -23,6 +23,11 @@ pub trait Vfs {
     fn read_dir(&self, path: &Path) -> io::Result<Vec<PathBuf>>;
     fn exists(&self, path: &Path) -> bool;
     fn is_dir(&self, path: &Path) -> bool;
+    /// Original source location when a virtual tree aliases another file.
+    /// Walkers use virtual paths for layout and source paths for diagnostics.
+    fn source_path(&self, path: &Path) -> PathBuf {
+        path.to_path_buf()
+    }
 }
 
 /// Real-filesystem-backed `Vfs`. Used by the CLI and tests.

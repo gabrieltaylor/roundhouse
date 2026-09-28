@@ -1274,6 +1274,16 @@ impl ResourceScope {
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum RouteSpec {
+    /// A source-local engine has its own controller and helper namespace.
+    /// The host contributes only the mount path and proxy name. Keeping the
+    /// boundary explicit prevents host controller scopes leaking into it.
+    Mount {
+        path: String,
+        as_prefix: String,
+        module: Option<String>,
+        source_root: String,
+        entries: Vec<RouteSpec>,
+    },
     /// Direct verb call: `get "/path", to: "controller#action"[, as: :name]`.
     /// The explicit form is the only one that can express arbitrary paths
     /// and custom constraints.

@@ -123,7 +123,7 @@ pub struct App {
     pub binary_assets: Vec<(String, Vec<u8>)>,
     /// App-helper method registry: maps each method name defined in an
     /// `app/helpers/*.rb` module to the helper module (`ClassId`) that
-    /// defines it. Rails mixes all helper modules into every view, so a
+    /// defines it. Rails mixes the host's helper modules into its views, so a
     /// bare `avatar_img(...)` in a template should resolve to the helper
     /// that declares it. The ruby emit-path helper-lowering pass uses this
     /// to (a) rewrite such bare calls to `<Module>.method(...)` and (b)
@@ -132,6 +132,9 @@ pub struct App {
     /// ships no helpers or only empty helper modules (the blog).
     #[serde(default, skip_serializing_if = "HashMap::is_empty")]
     pub helper_method_index: HashMap<Symbol, ClassId>,
+    /// Isolated engines keep their helper lookup separate from the host.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub isolated_helper_scopes: Vec<HelperScope>,
     /// Controller methods the app declared view-visible with Rails'
     /// `helper_method :name`. A view lowers to a module function with no
     /// controller instance, so a bare call to one of these routes
@@ -549,6 +552,13 @@ pub struct ImportmapPin {
     pub path: String,
 }
 
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct HelperScope {
+    pub namespace: String,
+    pub source_root: String,
+    pub methods: HashMap<Symbol, ClassId>,
+}
+
 impl App {
     /// Module → the one non-module class that includes it, directly or
     /// through another module; absent when none or several do. A
@@ -655,6 +665,7 @@ impl App {
             content_helper_allowed_attributes: Vec::new(),
             inferred_method_params: HashMap::new(),
             helper_method_index: HashMap::new(),
+            isolated_helper_scopes: Vec::new(),
             view_visible_controller_methods: BTreeSet::new(),
             global_id_locate_models: BTreeSet::new(),
             attachable_unsigned_models: Vec::new(),

@@ -21,7 +21,7 @@ use crate::dialect::{HttpMethod, LibraryFunction, Param};
 use crate::effect::EffectSet;
 use crate::expr::{ArrayStyle, Expr, ExprNode, InterpPart, Literal};
 use crate::ident::{ClassId, Symbol, VarId};
-use crate::lower::routes::{flatten_routes, FlatRoute};
+use crate::lower::routes::{flatten_routes, route_helpers, FlatRoute, RouteHelper};
 use crate::lower::typing::{fn_sig, lit_str, lit_sym, with_ty};
 use crate::span::Span;
 use crate::ty::Ty;
@@ -194,10 +194,7 @@ pub(crate) fn controller_symbol(class_name: &str) -> String {
 /// `LibraryFunction`s, one per named route. Empty when the app has
 /// no routes.
 pub fn lower_routes_to_library_functions(app: &App) -> Vec<LibraryFunction> {
-    let flat = flatten_routes(app);
-    if flat.is_empty() {
-        return Vec::new();
-    }
+    let flat = route_helpers(app);
     let module_path = vec![Symbol::from("RouteHelpers")];
     // Dedupe: multiple HTTP verbs on the same path collapse to a
     // single helper (`articles` for both index/create — same URL).
@@ -220,7 +217,7 @@ pub fn lower_routes_to_library_functions(app: &App) -> Vec<LibraryFunction> {
     // nil)` — a duplicate parameter name.
     let mut helper_shape: std::collections::HashMap<String, (Vec<String>, usize)> =
         Default::default();
-    for r in flat.iter().filter(|r| r.named) {
+    for r in &flat {
         // Both spellings: `_url` is the same helper with the host in
         // front (the view/controller lowering rewrites it to `"http://…"
         // + <name>_path(…)`), and campfire calls `new_session_url(
@@ -248,7 +245,7 @@ pub fn lower_routes_to_library_functions(app: &App) -> Vec<LibraryFunction> {
     // the variant under its own name collects them against the variant,
     // where they belong.
     let declared: std::collections::HashSet<String> =
-        flat.iter().filter(|r| r.named).map(|r| format!("{}_path", r.as_name)).collect();
+        flat.iter().map(|r| format!("{}_path", r.as_name)).collect();
     let variants = format_variant_demand(app, &declared);
     for (name, (as_name, _)) in &variants {
         let base = helper_shape.get(&format!("{as_name}_path")).cloned();
@@ -262,14 +259,6 @@ pub fn lower_routes_to_library_functions(app: &App) -> Vec<LibraryFunction> {
     let query_keys = query_param_demand(app, &helper_shape);
     let string_segments = string_segment_demand(app, &helper_shape);
     for route in &flat {
-        // Unnamed dynamic routes (`get "/comments/page/:page"`, no `as:`)
-        // get no helper in Rails — their action-name fallback would
-        // shadow a real static route's helper under first-wins dedupe
-        // (`comments_path` for `/replies/comments/page/:page` hiding
-        // `/comments`).
-        if !route.named {
-            continue;
-        }
         let helper = format!("{}_path", route.as_name);
         if !seen.insert(helper.clone()) {
             continue;
@@ -287,7 +276,7 @@ pub fn lower_routes_to_library_functions(app: &App) -> Vec<LibraryFunction> {
     // Format variants — one function per (route, format) a call site
     // actually asked for. See `format_variant_demand`.
     for (name, (as_name, ext)) in &variants {
-        let Some(route) = flat.iter().find(|r| r.named && &r.as_name == as_name) else {
+        let Some(route) = flat.iter().find(|r| &r.as_name == as_name) else {
             continue;
         };
         if !seen.insert(name.clone()) {
@@ -695,7 +684,7 @@ fn model_key_is_string(model: &crate::dialect::Model, app: &App) -> bool {
 fn build_helper_function(
     module_path: &[Symbol],
     helper_name: &str,
-    route: &FlatRoute,
+    route: &RouteHelper,
     app: &App,
     query_keys: &[QueryKey],
     // Segments a call site fills with a String — see
@@ -707,7 +696,11 @@ fn build_helper_function(
     // extension is a literal here, so it costs the base helper nothing.
     ext: Option<&str>,
 ) -> LibraryFunction {
-    let slug_id = model_overrides_to_param(route.controller.0.as_str(), helper_name, app);
+    let slug_id = model_overrides_to_param(
+        route.controller.as_ref().map_or("", |c| c.0.as_str()),
+        helper_name,
+        app,
+    );
     // Slugness is PER PARAM: a nested parent's segment names its model
     // directly (`story_id` in `/stories/:story_id/suggestions` → Story,
     // whose to_param is a short_id slug) — the owning route's
@@ -1209,7 +1202,9 @@ fn string_segment_demand(
             helpers: &std::collections::HashMap<String, (Vec<String>, usize)>,
             out: &mut Demand,
         ) {
-            if let ExprNode::Send { recv: None, method, args, .. } = &*e.node {
+            if let ExprNode::Send { recv, method, args, .. } = &*e.node
+                && super::route_helper_receiver::is_helper_receiver(recv)
+            {
                 if let Some((segments, _)) = helpers.get(method.as_str()) {
                     // Positionals only — a trailing kwargs hash is the
                     // query/keyword half and names its own keys.
@@ -1325,7 +1320,9 @@ fn query_param_demand(
             models: &std::collections::HashMap<String, bool>,
             records: &mut Records,
         ) {
-            if let ExprNode::Send { recv: None, method, args, .. } = &*e.node {
+            if let ExprNode::Send { recv, method, args, .. } = &*e.node
+                && super::route_helper_receiver::is_helper_receiver(recv)
+            {
                 if let Some((segments, required)) = helpers.get(method.as_str()) {
                     if let Some(last) = args.last() {
                         // A call that does not fill the helper's required
@@ -1439,7 +1436,7 @@ fn record_model_slug(v: &Expr, models: &std::collections::HashMap<String, bool>)
 /// concat form it replaced (`x_path(…) + ".json"`) put the extension
 /// after the QUERY STRING, which is a different URL. A function per pair
 /// costs nothing to the callers that never mention a format.
-fn format_variant_demand(
+pub(super) fn format_variant_demand(
     app: &App,
     declared: &std::collections::HashSet<String>,
 ) -> std::collections::BTreeMap<String, (String, String)> {
@@ -1449,7 +1446,7 @@ fn format_variant_demand(
     // against the LONGEST route name it starts with or `story_comments`
     // reads as route `story` with format `comments`.
     let mut names: Vec<String> =
-        flatten_routes(app).into_iter().filter(|r| r.named).map(|r| r.as_name).collect();
+        route_helpers(app).into_iter().map(|r| r.as_name).collect();
     names.sort();
     names.dedup();
     names.sort_by_key(|n| std::cmp::Reverse(n.len()));
@@ -1460,7 +1457,9 @@ fn format_variant_demand(
             declared: &std::collections::HashSet<String>,
             out: &mut std::collections::BTreeMap<String, (String, String)>,
         ) {
-            if let ExprNode::Send { recv: None, method, .. } = &*e.node {
+            if let ExprNode::Send { recv, method, .. } = &*e.node
+                && super::route_helper_receiver::is_helper_receiver(recv)
+            {
                 let raw = method.as_str();
                 if let Some(stem) = raw.strip_suffix("_path").or_else(|| raw.strip_suffix("_url")) {
                     // A real helper of that name wins — never shadow a
@@ -1499,6 +1498,9 @@ fn format_variant_demand(
 /// needs, and the test fails on arity.
 fn for_each_route_call_site(app: &App, f: &mut impl FnMut(&Expr)) {
     crate::lower::for_each_hook_body_ref(app, f);
+    for helper in &app.routes.direct_helpers {
+        f(&helper.body);
+    }
     for view in &app.views {
         f(&view.body);
     }
@@ -1961,7 +1963,9 @@ fn expr_splats_into_a_route_helper(
     e: &Expr,
     shapes: &std::collections::HashMap<String, Vec<bool>>,
 ) -> bool {
-    if let ExprNode::Send { recv: None, method, args, .. } = &*e.node {
+    if let ExprNode::Send { recv, method, args, .. } = &*e.node
+        && super::route_helper_receiver::is_helper_receiver(recv)
+    {
         if crate::lower::controller_to_library::rewrites::route_helper_query_splat_index(
             method.as_str(),
             args,

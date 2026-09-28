@@ -55,17 +55,9 @@
 //! type error the ledger reports, which beats a silent guess
 //! ([[project_lobsters_story_route_kwargs_poly_receiver]]).
 //!
-//! **WHERE it runs is a constraint, not a preference.** Every route
-//! helper receiver in the emit is added at EMIT time — controllers get
-//! theirs in `controller_to_library`, views in `emit_lowered_views` —
-//! and that is because `lower_routes_to_library_functions` SURVEYS the
-//! app IR for bare `<x>_path` sends first, to decide each generated
-//! helper's segment types and query keys. Run this at app-lowering
-//! time instead and the survey stops seeing the call: campfire's
-//! `qr_code_path` lost the String-typed segment it had been given, and
-//! `room_involvement_path` lost its `involvement:` query parameter
-//! entirely. So this runs beside `apply_helper_lowering`, which is the
-//! same reason that pass runs where it does.
+//! Implicit helper receivers are added at emit time, after owner methods
+//! have resolved. Explicit `RouteHelpers` calls keep their receiver through
+//! analysis; route-option lowering and call-site surveys accept both forms.
 
 use crate::app::App;
 use crate::expr::{Expr, ExprNode};
@@ -87,11 +79,18 @@ fn is_helper_shaped(name: &Symbol) -> bool {
     name.as_str().ends_with("_path") || name.as_str().ends_with("_url")
 }
 
+pub(crate) fn is_helper_receiver(recv: &Option<Expr>) -> bool {
+    recv.as_ref().is_none_or(|recv| {
+        matches!(&*recv.node, ExprNode::Const { path }
+            if path.len() == 1 && path[0].as_str() == "RouteHelpers")
+    })
+}
+
 /// Every name a call can use and reach a real `RouteHelpers` method.
 pub(crate) fn answered_names(app: &App) -> HashSet<Symbol> {
     let mut out: HashSet<Symbol> = ENGINE_MOUNTED_HELPERS.iter().map(|n| Symbol::from(*n)).collect();
-    for route in crate::lower::routes::flatten_routes(app) {
-        if !route.named || route.as_name.is_empty() {
+    for route in crate::lower::routes::route_helpers(app) {
+        if route.as_name.is_empty() {
             continue;
         }
         out.insert(Symbol::from(format!("{}_path", route.as_name)));
@@ -126,16 +125,15 @@ pub(crate) fn qualify(body: &Expr, answered: &HashSet<Symbol>, shadowed: &HashSe
     })
 }
 
-/// Every `_path` / `_url` name defined by a HELPER MODULE — the view
-/// scope's shadow set.
-pub(crate) fn helper_module_shadows(app: &App) -> HashSet<Symbol> {
-    app.library_classes
-        .iter()
-        .filter(|lc| lc.is_module)
-        .flat_map(|lc| lc.methods.iter())
-        .map(|m| m.name.clone())
-        .filter(is_helper_shaped)
-        .collect()
+pub(crate) fn helper_methods_by_scope(app: &App) -> HashMap<Option<usize>, HashSet<Symbol>> {
+    let mut methods: HashMap<_, HashSet<_>> = HashMap::new();
+    for lc in app.library_classes.iter().filter(|lc| lc.is_module) {
+        let scope = app.helper_scope_for(
+            lc.name.0.as_str(), lc.methods.first().map(|m| m.body.span).unwrap_or_default(),
+        );
+        methods.entry(scope).or_default().extend(lc.methods.iter().map(|m| m.name.clone()));
+    }
+    methods
 }
 
 /// Run over already-lowered `LibraryClass`es — view modules, models,
@@ -148,14 +146,16 @@ pub fn qualify_lcs(lcs: &mut [crate::dialect::LibraryClass], app: &App) {
     // in `lcs` count as well as the ones on `app`: the view pipeline
     // passes view LCs while the helpers sit on `app`, and the library
     // pipeline passes the helpers themselves.
-    let mut helper_shadows = helper_module_shadows(app);
-    helper_shadows.extend(
-        lcs.iter()
-            .filter(|lc| lc.is_module)
-            .flat_map(|lc| lc.methods.iter())
-            .map(|m| m.name.clone())
-            .filter(is_helper_shaped),
-    );
+    let mut helper_shadows = helper_methods_by_scope(app);
+    for lc in lcs.iter().filter(|lc| lc.is_module) {
+        let scope = app.helper_scope_for(
+            lc.name.0.as_str(), lc.methods.first().map(|m| m.body.span).unwrap_or_default(),
+        );
+        helper_shadows.entry(scope).or_default().extend(lc.methods.iter().map(|m| m.name.clone()));
+    }
+    for names in helper_shadows.values_mut() {
+        names.retain(is_helper_shaped);
+    }
     let owned: HashMap<ClassId, HashSet<Symbol>> = lcs
         .iter()
         .map(|lc| {
@@ -168,7 +168,9 @@ pub fn qualify_lcs(lcs: &mut [crate::dialect::LibraryClass], app: &App) {
     let shadow_sets: Vec<HashSet<Symbol>> = lcs
         .iter()
         .map(|lc| {
-            let mut set = helper_shadows.clone();
+            let span = lc.methods.first().map(|m| m.body.span).unwrap_or_default();
+            let scope = app.helper_scope_for(lc.name.0.as_str(), span);
+            let mut set = helper_shadows.get(&scope).cloned().unwrap_or_default();
             for id in std::iter::once(&lc.name).chain(lc.includes.iter()).chain(lc.parent.iter()) {
                 set.extend(owned.get(id).into_iter().flatten().cloned());
             }

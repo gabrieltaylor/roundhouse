@@ -46,13 +46,13 @@ use crate::expr::{Expr, ExprNode, InterpPart, Literal};
 use crate::ident::{Symbol, VarId};
 use crate::span::Span;
 
-use super::super::routes::FlatRoute;
+use super::super::routes::RouteHelper;
 
 /// One `RouteHelpers.<name>_path` per `direct` declaration.
-pub fn lower_direct_helpers(
+pub(super) fn lower_direct_helpers(
     module_path: &[Symbol],
     app: &App,
-    flat: &[FlatRoute],
+    flat: &[RouteHelper],
 ) -> Vec<LibraryFunction> {
     app.routes
         .direct_helpers
@@ -64,7 +64,7 @@ pub fn lower_direct_helpers(
 fn build_direct_helper(
     module_path: &[Symbol],
     helper: &DirectHelper,
-    flat: &[FlatRoute],
+    flat: &[RouteHelper],
 ) -> LibraryFunction {
     // The trailing options hash takes a `{}` default — see the header.
     let last = helper.params.len().saturating_sub(1);
@@ -82,6 +82,11 @@ fn build_direct_helper(
         .collect();
     let mut body = helper.body.clone();
     rewrite_route_for(&mut body, flat);
+    let answered = flat
+        .iter()
+        .map(|route| Symbol::from(format!("{}_path", route.as_name)))
+        .collect();
+    body = super::super::route_helper_receiver::qualify(&body, &answered, &Default::default());
     LibraryFunction {
         module_path: module_path.to_vec(),
         name: Symbol::from(format!("{}_path", helper.name.as_str())),
@@ -98,7 +103,7 @@ fn empty_hash() -> Expr {
 }
 
 /// `route_for :target, arg…, k: v` → `<target>_path(arg…)` + query.
-fn rewrite_route_for(expr: &mut Expr, flat: &[FlatRoute]) {
+fn rewrite_route_for(expr: &mut Expr, flat: &[RouteHelper]) {
     expr.node
         .for_each_child_mut(&mut |c| rewrite_route_for(c, flat));
 
@@ -126,7 +131,7 @@ fn rewrite_route_for(expr: &mut Expr, flat: &[FlatRoute]) {
     // A `route_for` naming a route that does not exist would emit a call
     // to a helper nobody defines. Leave it alone so the failure names the
     // missing route rather than appearing as a mystery NameError.
-    if !flat.iter().any(|r| r.named && format!("{}_path", r.as_name) == helper) {
+    if !flat.iter().any(|r| format!("{}_path", r.as_name) == helper) {
         return;
     }
     let span = expr.span;
