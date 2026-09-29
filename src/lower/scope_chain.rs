@@ -1174,12 +1174,13 @@ pub fn build_assoc_registry(models: &[Model]) -> AssocRegistry {
     for m in models {
         let own = reg.table_for(&m.name);
         for a in m.associations() {
+            let primary_key = a.primary_key();
             match a {
-                Association::BelongsTo { name, target, foreign_key, .. } => {
+                Association::BelongsTo { name, target, foreign_key, polymorphic: false, .. } => {
                     let t = reg.table_for(target);
                     reg.join_tails.insert(
                         (m.name.clone(), name.clone()),
-                        format!("{t} ON {t}.id = {own}.{foreign_key}"),
+                        format!("{t} ON {t}.{primary_key} = {own}.{foreign_key}"),
                     );
                     reg.belongs_to_fk
                         .insert((m.name.clone(), name.clone()), foreign_key.clone());
@@ -1190,7 +1191,7 @@ pub fn build_assoc_registry(models: &[Model]) -> AssocRegistry {
                     if name.as_str() != t {
                         reg.aliased_join_tails.insert(
                             (m.name.clone(), name.clone()),
-                            format!("{t} {name} ON {name}.id = {own}.{foreign_key}"),
+                            format!("{t} {name} ON {name}.{primary_key} = {own}.{foreign_key}"),
                         );
                     }
                 }
@@ -1207,7 +1208,7 @@ pub fn build_assoc_registry(models: &[Model]) -> AssocRegistry {
                     for x in extension {
                         reg.assoc_extension.insert((name.clone(), x.name.clone()));
                     }
-                    if as_interface.is_some()
+                    if primary_key.as_str() != "id" || as_interface.is_some()
                         || scope.as_ref().is_some_and(|s| !scope_is_row_preserving(s))
                     {
                         reg.has_many_unseedable.insert((m.name.clone(), name.clone()));
@@ -1215,7 +1216,7 @@ pub fn build_assoc_registry(models: &[Model]) -> AssocRegistry {
                     let t = reg.table_for(target);
                     reg.join_tails.insert(
                         (m.name.clone(), name.clone()),
-                        format!("{t} ON {t}.{foreign_key} = {own}.id"),
+                        format!("{t} ON {t}.{foreign_key} = {own}.{primary_key}"),
                     );
                     reg.has_many_fk.insert(
                         (m.name.clone(), name.clone()),
@@ -1228,7 +1229,7 @@ pub fn build_assoc_registry(models: &[Model]) -> AssocRegistry {
                     if name.as_str() != t {
                         reg.aliased_join_tails.insert(
                             (m.name.clone(), name.clone()),
-                            format!("{t} {name} ON {name}.{foreign_key} = {own}.id"),
+                            format!("{t} {name} ON {name}.{foreign_key} = {own}.{primary_key}"),
                         );
                     }
                     let entry = (target.clone(), foreign_key.clone());
@@ -1245,7 +1246,7 @@ pub fn build_assoc_registry(models: &[Model]) -> AssocRegistry {
                     let t = reg.table_for(target);
                     reg.join_tails.insert(
                         (m.name.clone(), name.clone()),
-                        format!("{t} ON {t}.{foreign_key} = {own}.id"),
+                        format!("{t} ON {t}.{foreign_key} = {own}.{primary_key}"),
                     );
                     reg.assoc_table
                         .insert((m.name.clone(), name.clone()), Symbol::from(t.as_str()));
@@ -1254,50 +1255,22 @@ pub fn build_assoc_registry(models: &[Model]) -> AssocRegistry {
                     if name.as_str() != t {
                         reg.aliased_join_tails.insert(
                             (m.name.clone(), name.clone()),
-                            format!("{t} {name} ON {name}.{foreign_key} = {own}.id"),
+                            format!("{t} {name} ON {name}.{foreign_key} = {own}.{primary_key}"),
                         );
                     }
                 }
-                // `has_many :through`: two hops, owner-side direction
-                // (`Tag.joins(:stories)` → JOIN taggings ON tag_id, JOIN
-                // stories ON story_id). Same fk resolution as the
-                // through-reader lowering: the through association names
-                // the join model; its `belongs_to` matching the assoc's
-                // target class supplies the source fk (survives `source:`
-                // renames, which ingest folds into `target`).
-                Association::HasMany { name, target, through: Some(thr_name), .. } => {
-                    let Some(Association::HasMany { target: thr_target, foreign_key: thr_fk, .. }) =
-                        m.associations().find(|a| {
-                            matches!(a, Association::HasMany { name, .. } if name == thr_name)
-                        })
-                    else {
-                        continue;
-                    };
-                    let Some(thr_model) = models.iter().find(|tm| &tm.name == thr_target) else {
-                        continue;
-                    };
-                    let Some(Association::BelongsTo { foreign_key: src_fk, .. }) =
-                        thr_model.associations().find(|a| {
-                            matches!(a, Association::BelongsTo { target: t, .. } if t == target)
-                        })
-                    else {
-                        continue;
-                    };
-                    let thr_table = reg.table_for(thr_target);
-                    let target_table = reg.table_for(target);
-                    reg.join_tails.insert(
-                        (m.name.clone(), name.clone()),
-                        format!(
-                            "{thr_table} ON {thr_table}.{thr_fk} = {own}.id \
-                             INNER JOIN {target_table} ON {target_table}.id = {thr_table}.{src_fk}"
-                        ),
-                    );
-                    reg.assoc_table
-                        .insert((m.name.clone(), name.clone()), Symbol::from(target_table.as_str()));
-                    reg.assoc_target
-                        .insert((m.name.clone(), name.clone()), target.clone());
+                Association::HasMany { name, target, through: Some(_), .. } => {
+                    reg.assoc_table.insert((m.name.clone(), name.clone()), Symbol::from(reg.table_for(target)));
+                    reg.assoc_target.insert((m.name.clone(), name.clone()), target.clone());
                 }
                 _ => {}
+            }
+            if let Ok(plan) = crate::lower::association_plan::resolve(models, m, a) {
+                let key = (m.name.clone(), a.name().clone());
+                reg.join_tails.insert(key.clone(), plan.owner_join);
+                if let Some(tail) = plan.aliased_owner_join {
+                    reg.aliased_join_tails.insert(key, tail);
+                }
             }
         }
     }
@@ -4404,6 +4377,28 @@ mod tests {
     }
 
     #[test]
+    fn registry_aliases_only_the_target_side_of_self_joins() {
+        let person = ingest(
+            "class Person < ApplicationRecord\n  belongs_to :manager, class_name: 'Person', foreign_key: :manager_id\n  has_many :reports, class_name: 'Person', foreign_key: :manager_id\nend\n",
+            "app/models/person.rb",
+        );
+        let registry = build_assoc_registry(&[person]);
+        let owner = ClassId(Symbol::from("Person"));
+        assert_eq!(
+            registry
+                .aliased_join_tail(&owner, &Symbol::from("manager"))
+                .map(String::as_str),
+            Some("people manager ON manager.id = people.manager_id"),
+        );
+        assert_eq!(
+            registry
+                .aliased_join_tail(&owner, &Symbol::from("reports"))
+                .map(String::as_str),
+            Some("people reports ON reports.manager_id = people.id"),
+        );
+    }
+
+    #[test]
     fn registry_resolves_has_many_through_join_tails() {
         // Tag.joins(:stories) — owner-side two-hop tail through taggings.
         let tag = ingest(
@@ -4414,7 +4409,8 @@ mod tests {
             "class Tagging < ApplicationRecord\n  belongs_to :tag\n  belongs_to :story\nend\n",
             "app/models/tagging.rb",
         );
-        let reg = build_assoc_registry(&[tag, tagging]);
+        let story = ingest("class Story < ApplicationRecord\nend\n", "app/models/story.rb");
+        let reg = build_assoc_registry(&[tag, tagging, story]);
         assert_eq!(
             reg.join_tail(&ClassId(Symbol::from("Tag")), &Symbol::from("stories")),
             Some(
@@ -4426,10 +4422,7 @@ mod tests {
     }
 
     #[test]
-    fn registry_through_source_rename_resolves_by_target_class() {
-        // `has_many :upvoted_stories, through: :votes, source: :story` —
-        // ingest folds `source:` into the target class (Story); the through
-        // model's `belongs_to :story` supplies the source fk.
+    fn registry_through_source_rename_resolves_by_source_association() {
         let user = ingest(
             "class User < ApplicationRecord\n  has_many :votes\n  has_many :upvoted_stories, through: :votes, source: :story\nend\n",
             "app/models/user.rb",
@@ -4438,7 +4431,8 @@ mod tests {
             "class Vote < ApplicationRecord\n  belongs_to :user\n  belongs_to :story\nend\n",
             "app/models/vote.rb",
         );
-        let reg = build_assoc_registry(&[user, vote]);
+        let story = ingest("class Story < ApplicationRecord\nend\n", "app/models/story.rb");
+        let reg = build_assoc_registry(&[user, vote, story]);
         assert_eq!(
             reg.join_tail(&ClassId(Symbol::from("User")), &Symbol::from("upvoted_stories")),
             Some(

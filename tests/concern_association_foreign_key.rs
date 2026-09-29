@@ -37,6 +37,7 @@ fn user_src() -> String {
   end
   create_table "notes", force: :cascade do |t|
     t.integer "author_id", null: false
+    t.integer "bot_id", null: false
   end
 end
 "#,
@@ -53,6 +54,7 @@ end
   included do
     has_one :webhook, dependent: :delete
     has_many :notes, foreign_key: :author_id
+    has_many :bot_notes, class_name: "Note", foreign_key: :bot_id
   end
 end
 "#,
@@ -84,4 +86,10 @@ fn a_defaulted_key_is_rehomed_to_the_includer() {
 fn an_explicit_key_is_untouched() {
     let src = user_src();
     assert!(src.contains("author_id"), "explicit foreign_key must survive:\n{src}");
+}
+
+#[test]
+fn an_explicit_key_equal_to_the_concern_default_is_untouched() {
+    let src = user_src();
+    assert!(src.contains("bot_id = "), "explicit bot_id must survive rehoming:\n{src}");
 }

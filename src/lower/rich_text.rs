@@ -158,6 +158,7 @@ pub fn synthesize_record_model(app: &mut App) {
     // can name any of them.
     let body = vec![ModelBodyItem::Association {
         assoc: Association::BelongsTo {
+            options: Default::default(),
             name: Symbol::from("record"),
             target: ClassId(Symbol::from("Record")),
             foreign_key: Symbol::from("record_id"),

@@ -19,6 +19,7 @@
 
 pub mod arel;
 pub mod associations;
+pub mod association_plan;
 pub mod blank;
 pub mod broadcast_calls;
 pub mod module_mixins;
