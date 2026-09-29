@@ -439,6 +439,7 @@ fn protocol_keys(expr: &Expr) -> bool {
     }
 }
 
+#[cfg(not(target_arch = "wasm32"))]
 pub fn check_target(app: &crate::App, target: crate::project::BuildTarget) -> Result<(), String> {
     use crate::project::BuildTarget;
     if matches!(
