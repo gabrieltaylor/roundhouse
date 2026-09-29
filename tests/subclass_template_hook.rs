@@ -17,7 +17,7 @@ use std::path::PathBuf;
 use roundhouse::emit::ruby;
 use roundhouse::ingest::ingest_app_from_tree;
 
-fn emitted() -> Vec<(String, String)> {
+fn emitted(defaults: &str) -> Vec<(String, String)> {
     let files: HashMap<PathBuf, Vec<u8>> = [
         (
             PathBuf::from("db/schema.rb"),
@@ -25,7 +25,7 @@ fn emitted() -> Vec<(String, String)> {
         ),
         (
             PathBuf::from("config/routes.rb"),
-            b"Rails.application.routes.draw do\n  resources :messages, only: %i[ update ]\n  scope path: \":bot_key\", as: :bot, defaults: { format: :json } do\n    resources :messages, controller: \"messages/by_bots\", only: %i[ update ]\n  end\nend\n".to_vec(),
+            format!("Rails.application.routes.draw do\n  resources :messages, only: %i[ update ]\n  scope path: \":bot_key\", as: :bot do\n    {defaults} do\n      resources :messages, controller: \"messages/by_bots\", only: %i[ update ]\n    end\n  end\nend\n").into_bytes(),
         ),
         (
             PathBuf::from("app/models/message.rb"),
@@ -64,7 +64,7 @@ fn file<'a>(files: &'a [(String, String)], suffix: &str) -> &'a str {
 
 #[test]
 fn the_defining_controller_renders_through_a_hook_that_raises() {
-    let files = emitted();
+    let files = emitted("scope defaults: { format: :json }");
     let parent = file(&files, "app/controllers/messages_controller.rb");
     assert!(
         parent.contains("render(self.__template_show_json, content_type: \"application/json\")"),
@@ -78,7 +78,7 @@ fn the_defining_controller_renders_through_a_hook_that_raises() {
 
 #[test]
 fn the_inheritor_overrides_the_hook_with_its_own_view() {
-    let files = emitted();
+    let files = emitted("scope defaults: { format: :json }");
     let child = file(&files, "app/controllers/messages/by_bots_controller.rb");
     assert!(
         child.contains("def __template_show_json\n      Views::Messages::ByBots.show_json(@message)"),
@@ -90,7 +90,16 @@ fn the_inheritor_overrides_the_hook_with_its_own_view() {
 
 #[test]
 fn a_scope_default_format_pins_the_format_on_its_routes() {
-    let files = emitted();
+    assert_route_formats("scope defaults: { format: :json }");
+}
+
+#[test]
+fn a_defaults_block_pins_the_format_on_its_routes() {
+    assert_route_formats("defaults format: :json");
+}
+
+fn assert_route_formats(defaults: &str) {
+    let files = emitted(defaults);
     let routes = file(&files, "config/routes.rb");
     assert!(
         routes.contains("Route.new(\"PATCH\", \"/:bot_key/messages/:id\", :messages_by_bots, :update, :json)"),

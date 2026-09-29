@@ -111,13 +111,24 @@ renames; `Explicit` records its `member`/`collection` scope).
 The recognizer covers the verb shortcuts (`get`/`post`/…), `match`,
 `root`, `resources`/`resource` (with `only:`/`except:`/`as:`/
 `controller:`/`param:`, symbol or string spellings alike, as Rails
-`to_sym`s them), `namespace`/`scope`,
+`to_sym`s them), `namespace`/`scope`, `defaults` blocks,
 `member`/`collection`/`constraints` blocks, `mount`, `draw(:name)`
 split files under `config/routes/`, and options like `defaults:`,
 `on:`, and `via:` — `src/ingest/routes.rs` is the authority on the
 current surface. A `redirect(...)` target — on a verb or on `root` —
 is not modeled: the route is dropped with a `route dropped:` ledger
 line, the same contract as `mount`.
+
+`defaults format: :json do … end` uses the same shared scope representation
+as `scope defaults: { format: :json } do … end`. Defaults accept literal
+symbol keys and symbol or string values, merge with enclosing defaults, and
+apply only inside the block. Nested defaults override matching outer keys;
+resource nesting and route-helper names are preserved.
+Route-local `defaults:` on verbs, `root`, and resources override enclosing
+defaults. A verb's `format:` option supplies a fallback only when no default
+sets the format.
+String-keyed defaults are reported as unsupported: Rails keeps them distinct
+from symbol keys, while the route IR currently stores only symbol keys.
 
 **Downstream consumers (analyze/lower):**
 

@@ -144,6 +144,65 @@ fn split_routes_keep_engine_draws_separate_from_host() {
 }
 
 #[test]
+fn route_defaults_survive_engine_draws_and_resource_nesting() {
+    let mut tree = tree();
+    put(
+        &mut tree,
+        "config/routes.rb",
+        "Rails.application.routes.draw do\n resources :accounts, only: :show do\n mount Blog::Engine, at: '/news', as: :journal\n end\nend",
+    );
+    put(
+        &mut tree,
+        "engines/not_the_namespace/lib/blog/engine.rb",
+        "class Blog::Engine < Rails::Engine; end",
+    );
+    put(
+        &mut tree,
+        "engines/not_the_namespace/config/routes.rb",
+        r#"Blog::Engine.routes.draw do
+  defaults format: :json do
+    resources :posts, only: :show do
+      member do
+        get :preview, defaults: { format: :xml }
+      end
+      defaults format: :xml do
+        draw :comments
+      end
+    end
+  end
+  get '/status', to: 'status#show'
+end"#,
+    );
+    put(
+        &mut tree,
+        "engines/not_the_namespace/config/routes/comments.rb",
+        "resources :comments, only: :show, defaults: { format: :html }",
+    );
+    let app = app(tree);
+    let routes = flatten_routes(&app);
+    let mounted: Vec<_> = routes
+        .iter()
+        .filter(|route| route.path.contains("/news/"))
+        .map(|route| {
+            (
+                route.path.as_str(),
+                route.as_name.as_str(),
+                route.format.as_ref().map(|format| format.as_str()),
+            )
+        })
+        .collect();
+    assert_eq!(mounted, vec![
+        ("/accounts/:account_id/news/posts/:id", "account_journal_post", Some("json")),
+        ("/accounts/:account_id/news/posts/:id/preview", "account_journal_preview_post", Some("xml")),
+        ("/accounts/:account_id/news/posts/:post_id/comments/:id", "account_journal_post_comment", Some("html")),
+        ("/accounts/:account_id/news/status", "account_journal_status", None),
+    ]);
+    let parent = roundhouse::lower::find_nested_parent(&app, "CommentsController").unwrap();
+    assert_eq!(parent.plural, "posts");
+    assert!(roundhouse::lower::find_nested_parent(&app, "PostsController").is_none());
+}
+
+#[test]
 fn recursion_is_an_error_and_does_not_leak_state_to_next_ingest() {
     let mut tree = tree();
     put(
