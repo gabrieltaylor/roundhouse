@@ -290,10 +290,26 @@ impl ModelBodyItem {
     }
 }
 
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+#[serde(default)]
+pub struct AssociationOptions {
+    pub class_name: Option<ClassId>,
+    pub primary_key: Option<Symbol>,
+    pub foreign_key_explicit: bool,
+    pub primary_key_explicit: bool,
+    pub foreign_type: Option<Symbol>,
+    pub source: Option<Symbol>,
+    pub source_type: Option<ClassId>,
+    pub scope: Option<Expr>,
+    pub unsupported: Vec<String>,
+}
+
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum Association {
     BelongsTo {
+        #[serde(default)]
+        options: AssociationOptions,
         name: Symbol,
         target: ClassId,
         foreign_key: Symbol,
@@ -331,6 +347,8 @@ pub enum Association {
         touch: Option<Touch>,
     },
     HasMany {
+        #[serde(default)]
+        options: AssociationOptions,
         name: Symbol,
         target: ClassId,
         foreign_key: Symbol,
@@ -362,6 +380,8 @@ pub enum Association {
         extension: Vec<MethodDef>,
     },
     HasOne {
+        #[serde(default)]
+        options: AssociationOptions,
         name: Symbol,
         target: ClassId,
         foreign_key: Symbol,
@@ -378,6 +398,32 @@ pub enum Association {
 }
 
 impl Association {
+    pub fn options(&self) -> Option<&AssociationOptions> {
+        match self {
+            Self::BelongsTo { options, .. } | Self::HasMany { options, .. }
+            | Self::HasOne { options, .. } => Some(options),
+            Self::HasAndBelongsToMany { .. } => None,
+        }
+    }
+
+    pub fn target(&self) -> &ClassId {
+        match self {
+            Self::BelongsTo { target, .. } | Self::HasMany { target, .. }
+            | Self::HasOne { target, .. } | Self::HasAndBelongsToMany { target, .. } => target,
+        }
+    }
+
+    pub fn primary_key(&self) -> Symbol {
+        self.options().and_then(|o| o.primary_key.clone()).unwrap_or_else(|| Symbol::from("id"))
+    }
+
+    pub fn scope(&self) -> Option<&Expr> {
+        match self {
+            Self::HasMany { scope, .. } => scope.as_ref(),
+            _ => self.options().and_then(|o| o.scope.as_ref()),
+        }
+    }
+
     pub fn name(&self) -> &Symbol {
         match self {
             Association::BelongsTo { name, .. }

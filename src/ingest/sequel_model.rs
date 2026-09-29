@@ -228,6 +228,7 @@ fn parse_sequel_association(
                 Dependent::None
             };
             Association::HasMany {
+                options: Default::default(),
                 name,
                 target,
                 foreign_key,
@@ -241,6 +242,7 @@ fn parse_sequel_association(
             }
         }
         "one_to_one" => Association::HasOne {
+            options: Default::default(),
             name: name.clone(),
             target: class_name
                 .map(|s| ClassId(Symbol::from(s.as_str())))
@@ -252,6 +254,7 @@ fn parse_sequel_association(
             as_interface: None,
         },
         "many_to_one" => Association::BelongsTo {
+            options: Default::default(),
             name: name.clone(),
             target: class_name
                 .map(|s| ClassId(Symbol::from(s.as_str())))

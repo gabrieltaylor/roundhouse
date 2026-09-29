@@ -217,12 +217,8 @@ pub fn emit_lowered_models(app: &App) -> Vec<EmittedFile> {
     // Ruby-family scope lowering: synthesize model scope methods +
     // normalize scope chains before rendering (no-op for scope-free apps).
     library::apply_scope_lowering(&mut lcs, app);
-    // has_many :through readers: rebuild the shared direct-fk reader as a
-    // Relation join through the intermediate table (no-op when no
-    // through-assoc resolves).
-    library::apply_through_assoc_lowering(&mut lcs, app);
     // belongs_to autosave: an unsaved target assigned through the
-    // writer is saved at before_validation and its id taken (no-op for
+    // writer is saved at before_validation and its association key taken (no-op for
     // models with no belongs_to). Ruby-family only — see the pass.
     library::apply_belongs_to_autosave(&mut lcs, app);
     // An STI row hydrates as its subclass (no-op for apps with no STI).

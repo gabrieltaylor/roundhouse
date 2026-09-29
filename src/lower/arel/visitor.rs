@@ -310,21 +310,43 @@ fn push_preload_stmts(
     // ids = parent_results.map { |a| a.id }
     let map_block = block1(
         "a",
-        send_to(var_ref(&Symbol::from("a")), "id", vec![], false),
+        send_to(var_ref(&Symbol::from("a")), directive.primary_key.as_str(), vec![], false),
     );
     out.push(assign_var(&ids, send_block(var_ref(parent_results), "map", map_block)));
 
+    let fk_column = target_table.columns.iter().find(|c| c.name == directive.foreign_key);
+    let string_key = fk_column.is_some_and(|c| matches!(c.col_type, crate::schema::ColumnType::String { .. } | crate::schema::ColumnType::Text | crate::schema::ColumnType::Uuid));
+    let escaped_ids = if string_key {
+        let key = var_ref(&Symbol::from("key"));
+        let escaped = db_call(&db, "escape_string", vec![key]);
+        let mapped = send_block(var_ref(&ids), "map", block1("key", escaped));
+        send_to(mapped, "join", vec![lit_str(", ".into())], true)
+    } else {
+        db_call(&db, "escape_int_list", vec![var_ref(&ids)])
+    };
+    let type_filter = directive.type_condition.as_ref().map(|(key, value)| {
+        format!(" AND {} = '{}'", key, value.replace('\'', "''"))
+    }).unwrap_or_default();
+
     // pstmt = Db.prepare("SELECT <cols> FROM <tbl> WHERE <fk> IN (" + Db.escape_int_list(ids) + ")")
-    let sql = concat_chain(vec![
+    let mut sql_segments = vec![
         lit_str(format!(
             "SELECT {} FROM {} WHERE {} IN (",
             select_cols_csv(target_table),
             target_table.name.as_str(),
             directive.foreign_key.as_str(),
         )),
-        db_call(&db, "escape_int_list", vec![var_ref(&ids)]),
-        lit_str(")".to_string()),
-    ]);
+        escaped_ids,
+        lit_str(format!("){type_filter}")),
+    ];
+    if let Some(scope) = &directive.scope {
+        if let Some(condition) = &scope.conditions {
+            sql_segments.push(lit_str(" AND ".into()));
+            push_predicate_segments(&mut sql_segments, condition, false, &mut Vec::new());
+        }
+        push_order_segment(&mut sql_segments, &scope.orders);
+    }
+    let sql = concat_chain(sql_segments);
     out.push(assign_var(&pstmt, db_call(&db, "prepare", vec![sql])));
 
     // loaded = [] (typed Array<Target> so the `<<` push types cleanly)
@@ -379,7 +401,7 @@ fn push_preload_stmts(
                 false,
             )),
             method: Symbol::from("=="),
-            args: vec![send_to(var_ref(&Symbol::from("a")), "id", vec![], false)],
+            args: vec![send_to(var_ref(&Symbol::from("a")), directive.primary_key.as_str(), vec![], false)],
             block: None,
             parenthesized: false,
         },

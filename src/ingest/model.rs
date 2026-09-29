@@ -115,6 +115,10 @@ pub fn ingest_model(
         format!("{prefix}{}", crate::naming::rails_table_name(class_name.as_str()))
     };
 
+    let table_name = class.body().into_iter().flat_map(flatten_statements)
+        .filter_map(|stmt| parse_model_name_decl(&stmt, "table_name="))
+        .last().map(|name| name.as_str().to_string()).unwrap_or(table_name);
+
     let attributes = if let Some(table) = schema.tables.get(&Symbol::from(table_name.as_str())) {
         row_from_table(table)
     } else {
@@ -140,7 +144,11 @@ pub fn ingest_model(
             // the assignment verbatim would call a writer no target's
             // runtime defines. Comments above it fall through to the
             // next statement.
-            if let Some(pk) = parse_primary_key_decl(&stmt) {
+            if parse_model_name_decl(&stmt, "table_name=").is_some() {
+                prev_end = Some(stmt.location().end_offset());
+                continue;
+            }
+            if let Some(pk) = parse_model_name_decl(&stmt, "primary_key=") {
                 primary_key = Some(pk);
                 prev_end = Some(stmt.location().end_offset());
                 continue;
@@ -1236,9 +1244,10 @@ fn parse_association(
     let all_args = args.arguments();
     let mut iter = all_args.iter();
     let first = iter.next()?;
-    let name_str = symbol_value(&first)?;
+    let name_str = string_value(&first).or_else(|| symbol_value(&first))?;
     let name = Symbol::from(name_str.as_str());
 
+    let mut options = crate::dialect::AssociationOptions::default();
     let mut class_name: Option<String> = None;
     let mut foreign_key: Option<String> = None;
     let mut through: Option<String> = None;
@@ -1254,21 +1263,17 @@ fn parse_association(
     let mut touch: Option<crate::dialect::Touch> = None;
 
     for arg in iter {
-        // Positional lambda between name and kwargs — the association
-        // scope (`has_many :x, -> { where(...) }, through: :y`).
-        // Recorded as its raw body Expr; the reader synthesis grafts it
-        // onto the relation seed. Param-taking lambdas (rare
-        // owner-dependent scopes) are skipped — they need the owner
-        // threaded and no exercised corpus does this yet.
         if let Some(lambda) = arg.as_lambda_node() {
             if scope.is_none() {
                 let param_free = lambda
                     .parameters()
-                    .and_then(|p| p.as_block_parameters_node().and_then(|b| b.parameters()))
-                    .map(|pn| pn.requireds().iter().next().is_none())
+                    .map(|p| p.as_block_parameters_node().is_some_and(|b| b.parameters().is_none()))
                     .unwrap_or(true);
                 if param_free {
                     scope = lambda.body().and_then(|b| ingest_expr(&b, file).ok());
+                    if scope.is_none() { options.unsupported.push("unresolved association scope".into()); }
+                } else {
+                    options.unsupported.push("owner-dependent association scope".into());
                 }
             }
             continue;
@@ -1279,13 +1284,33 @@ fn parse_association(
             let Some(key) = symbol_value(&assoc.key()) else { continue };
             let value = assoc.value();
             match key.as_str() {
-                "class_name" => class_name = string_value(&value),
-                "foreign_key" => {
-                    foreign_key = string_value(&value).or_else(|| symbol_value(&value))
+                "class_name" => {
+                    class_name = string_value(&value).or_else(|| symbol_value(&value));
+                    if class_name.is_none() { options.unsupported.push("non-literal class_name".into()); }
                 }
-                "through" => through = symbol_value(&value),
-                "source" => source = symbol_value(&value),
-                "source_type" => source_type = string_value(&value),
+                "foreign_key" => {
+                    options.foreign_key_explicit = true;
+                    foreign_key = string_value(&value).or_else(|| symbol_value(&value));
+                    if foreign_key.is_none() { options.unsupported.push("non-scalar foreign_key".into()); }
+                }
+                "through" => {
+                    through = string_value(&value).or_else(|| symbol_value(&value));
+                    if through.is_none() { options.unsupported.push("non-literal through".into()); }
+                },
+                "source" => {
+                    source = string_value(&value).or_else(|| symbol_value(&value));
+                    if source.is_none() { options.unsupported.push("non-literal source".into()); }
+                },
+                "source_type" => {
+                    source_type = string_value(&value).or_else(|| symbol_value(&value));
+                    if source_type.is_none() { options.unsupported.push("non-literal source_type".into()); }
+                }
+                "primary_key" => {
+                    options.primary_key_explicit = true;
+                    options.primary_key = string_value(&value).or_else(|| symbol_value(&value)).as_deref().map(Symbol::from);
+                    if options.primary_key.is_none() { options.unsupported.push("non-scalar primary_key".into()); }
+                }
+                "foreign_type" => options.foreign_type = string_value(&value).or_else(|| symbol_value(&value)).as_deref().map(Symbol::from),
                 "dependent" => {
                     dependent = symbol_value(&value).and_then(|s| dependent_from_sym(&s))
                 }
@@ -1303,7 +1328,7 @@ fn parse_association(
                 }
                 "join_table" => join_table = string_value(&value),
                 "polymorphic" => polymorphic = bool_value(&value),
-                "as" => as_interface = symbol_value(&value),
+                "as" => as_interface = string_value(&value).or_else(|| symbol_value(&value)),
                 // `default: -> { Current.user }` — the lambda BODY, not
                 // the lambda. Rails calls it with `instance_exec`, so
                 // the body is already written against the record; a
@@ -1326,7 +1351,14 @@ fn parse_association(
         }
     }
 
-    let owner_snake = snake_case(owner.0.as_str());
+    let owner_snake = snake_case(owner.0.as_str().rsplit("::").next().unwrap_or(""));
+    options.class_name = class_name.as_deref().map(|s| ClassId(Symbol::from(s)));
+    options.source = source.as_deref().map(Symbol::from);
+    options.source_type = source_type.as_deref().map(|s| ClassId(Symbol::from(s)));
+    if method != "has_many" {
+        options.scope = scope.clone();
+        if through.is_some() { options.unsupported.push(format!("{method} through")); }
+    }
 
     // Association-extension block: `has_many :memberships do def
     // grant_to(users) … end end`. Only `def`s are collected — a block
@@ -1349,37 +1381,11 @@ fn parse_association(
 
     match method {
         "has_many" => Some(Association::HasMany {
+            options,
             name: name.clone(),
             extension,
-            // `source:` names the association on the `through:` model
-            // that supplies the rows (`has_many :upvoted_stories,
-            // through: :votes, source: :story` → Story, not the
-            // assoc-name-derived "UpvotedStory" phantom). class_name
-            // still wins when both are given, per Rails.
-            //
-            // SINGULARIZED, because the source association can be a
-            // has_many and then its name is PLURAL: campfire's
-            // `has_many :reachable_messages, through: :rooms, source:
-            // :messages` means Room#messages, so the class is Message.
-            // Camelizing alone produced a `Messages` phantom — and
-            // campfire has a `Messages::` controller MODULE by that
-            // name, so the reader resolved to it and failed at the
-            // `where` instead of at the missing constant. Singular
-            // sources are unaffected (Rails' inflector answers
-            // "story" for "story"), which is every other corpus use.
-            //
-            // `source_type:` disambiguates a *polymorphic* source
-            // reflection, naming the concrete class directly
-            // (`has_many :comment_references, through: :mod_mail_references,
-            // source: :reference, source_type: "Comment"` → Comment). It
-            // takes precedence over the camelized `source` name, which
-            // would otherwise be the polymorphic association name
-            // ("Reference") — a phantom class. Already CamelCase, so no
-            // transform.
             target: class_name
                 .map(|s| ClassId(Symbol::from(s.as_str())))
-                .or_else(|| source_type.map(|s| ClassId(Symbol::from(s.as_str()))))
-                .or_else(|| source.map(|s| ClassId(Symbol::from(singularize_camelize(s.as_str())))))
                 .unwrap_or_else(|| ClassId(Symbol::from(singularize_camelize(name_str.as_str())))),
             // `as: :notifiable` — the rows point back through the
             // interface columns, not an owner-named key.
@@ -1395,6 +1401,7 @@ fn parse_association(
             scope,
         }),
         "has_one" => Some(Association::HasOne {
+            options,
             name: name.clone(),
             target: class_name
                 .map(|s| ClassId(Symbol::from(s.as_str())))
@@ -1409,6 +1416,7 @@ fn parse_association(
             as_interface: as_interface.as_deref().map(Symbol::from),
         }),
         "belongs_to" => Some(Association::BelongsTo {
+            options,
             name: name.clone(),
             target: class_name
                 .map(|s| ClassId(Symbol::from(s.as_str())))
@@ -1441,10 +1449,10 @@ fn parse_association(
 /// per-model override of the `id` default. Prism parses it as a call to
 /// `primary_key=` on an explicit `self` receiver, which would otherwise
 /// land in `ModelBodyItem::Unknown` and be dropped.
-fn parse_primary_key_decl(stmt: &Node<'_>) -> Option<Symbol> {
+fn parse_model_name_decl(stmt: &Node<'_>, setter: &str) -> Option<Symbol> {
     let call = stmt.as_call_node()?;
     call.receiver()?.as_self_node()?;
-    if constant_id_str(&call.name()) != "primary_key=" {
+    if constant_id_str(&call.name()) != setter {
         return None;
     }
     let args = call.arguments()?;
