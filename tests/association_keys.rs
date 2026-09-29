@@ -214,6 +214,89 @@ fn unsupported_through_shapes_have_located_diagnostics() {
 }
 
 #[test]
+fn qualified_scope_hashes_keep_the_table_key() {
+    let app = app();
+    let owner = model(&app, "Ledger::Entry");
+    let assoc = owner
+        .associations()
+        .find(|assoc| assoc.name().as_str() == "restricted_invoice")
+        .unwrap();
+    let plan = roundhouse::lower::association_plan::resolve(&app.models, owner, assoc).unwrap();
+    let roundhouse::ExprNode::Send { args, .. } = &*plan.scopes[0].node else {
+        panic!("expected a where scope");
+    };
+    let roundhouse::ExprNode::Hash { entries, .. } = &*args[0].node else {
+        panic!("expected table-qualified conditions");
+    };
+    assert!(matches!(&*entries[0].0.node,
+        roundhouse::ExprNode::Lit { value: roundhouse::Literal::Sym { value } }
+        if value.as_str() == "documents"));
+}
+
+#[test]
+fn intermediate_preloads_are_not_retargeted_to_the_final_model() {
+    let mut app = app();
+    let owner = app
+        .models
+        .iter_mut()
+        .find(|model| model.name.0.as_str() == "Ledger::Payment")
+        .unwrap();
+    for item in &mut owner.body {
+        if let roundhouse::ModelBodyItem::Association {
+            assoc: Association::HasMany { name, scope, .. },
+            ..
+        } = item
+        {
+            if name.as_str() == "entries" {
+                let parsed = ruby_prism::parse(b"includes(:invoice)");
+                let call = parsed
+                    .node()
+                    .as_program_node()
+                    .unwrap()
+                    .statements()
+                    .body()
+                    .iter()
+                    .next()
+                    .unwrap();
+                *scope = Some(roundhouse::ingest::ingest_expr(&call, "scope.rb").unwrap());
+            }
+        }
+    }
+    let diagnostics = roundhouse::analyze::diagnose(&app);
+    assert!(
+        diagnostics.iter().any(
+            |diagnostic| diagnostic.message.contains("through intermediate")
+                && !diagnostic.span.is_synthetic()
+        ),
+        "{diagnostics:?}"
+    );
+}
+
+#[test]
+fn dynamic_polymorphic_type_columns_are_diagnosed() {
+    let files = [
+        ("db/schema.rb", "ActiveRecord::Schema.define do\n create_table(:owners) {}\n create_table(:items) {}\nend"),
+        ("app/models/owner.rb", "class Owner < ApplicationRecord\n has_many :items, as: :attachable, foreign_type: type_column\nend"),
+        ("app/models/item.rb", "class Item < ApplicationRecord\n belongs_to :attachable, polymorphic: true, foreign_type: type_column\nend"),
+    ]
+    .into_iter()
+    .map(|(path, source)| (PathBuf::from(path), source.as_bytes().to_vec()))
+    .collect();
+    let app = roundhouse::ingest::ingest_app_from_tree(files).unwrap();
+    let diagnostics = roundhouse::analyze::diagnose(&app);
+    let errors: Vec<_> = diagnostics
+        .iter()
+        .filter(|diagnostic| diagnostic.message.contains("non-literal foreign_type"))
+        .collect();
+    assert_eq!(errors.len(), 2, "{diagnostics:?}");
+    assert!(
+        errors
+            .iter()
+            .all(|diagnostic| !diagnostic.span.is_synthetic())
+    );
+}
+
+#[test]
 fn analysis_uses_the_resolved_through_target() {
     let mut app = app();
     roundhouse::analyze::Analyzer::new(&app).analyze(&mut app);

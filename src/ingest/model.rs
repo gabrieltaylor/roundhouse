@@ -1310,7 +1310,15 @@ fn parse_association(
                     options.primary_key = string_value(&value).or_else(|| symbol_value(&value)).as_deref().map(Symbol::from);
                     if options.primary_key.is_none() { options.unsupported.push("non-scalar primary_key".into()); }
                 }
-                "foreign_type" => options.foreign_type = string_value(&value).or_else(|| symbol_value(&value)).as_deref().map(Symbol::from),
+                "foreign_type" => {
+                    options.foreign_type = string_value(&value)
+                        .or_else(|| symbol_value(&value))
+                        .as_deref()
+                        .map(Symbol::from);
+                    if options.foreign_type.is_none() {
+                        options.unsupported.push("non-literal foreign_type".into());
+                    }
+                }
                 "dependent" => {
                     dependent = symbol_value(&value).and_then(|s| dependent_from_sym(&s))
                 }

@@ -12,6 +12,7 @@ pub struct AssociationPlan {
     pub group_column: String,
     pub joins: Vec<String>,
     pub owner_join: String,
+    pub aliased_owner_join: Option<String>,
     pub conditions: Vec<(String, String)>,
     pub scopes: Vec<Expr>,
     pub preloads: Vec<Expr>,
@@ -23,6 +24,18 @@ struct Hop {
     owner_key: Symbol,
     target_key: Symbol,
     record_key: Symbol,
+}
+
+impl Hop {
+    fn owner_join(&self, owner: &Model, alias: Option<&str>) -> String {
+        let table = &self.table;
+        let reference = alias.unwrap_or(table);
+        let relation = alias.map_or_else(|| table.clone(), |alias| format!("{table} {alias}"));
+        format!(
+            "{relation} ON {reference}.{} = {}.{}",
+            self.target_key, owner.table.0, self.owner_key
+        )
+    }
 }
 
 struct Path {
@@ -81,10 +94,7 @@ pub fn resolve(
             )
         })
         .collect();
-    let mut owner_join = format!(
-        "{} ON {}.{} = {}.{}",
-        first.table, first.table, first.target_key, owner.table.0, first.owner_key
-    );
+    let mut owner_join = first.owner_join(owner, None);
     for pair in path.hops.windows(2) {
         let [from, to] = pair else { unreachable!() };
         owner_join.push_str(&format!(
@@ -95,19 +105,21 @@ pub fn resolve(
     for (column, value) in &path.conditions {
         owner_join.push_str(&format!(" AND {column} = '{}'", value.replace('\'', "''")));
     }
-    let mut preloads = Vec::new();
-    fn collect_preloads(expr: &Expr, out: &mut Vec<Expr>) {
-        if let ExprNode::Send { method, args, .. } = &*expr.node {
-            if matches!(method.as_str(), "includes" | "preload" | "eager_load") {
-                out.extend(args.iter().cloned());
-            }
+    let aliased_owner_join = if path.hops.len() == 1 && assoc.name().as_str() != first.table {
+        let alias = assoc.name().as_str();
+        let mut join = first.owner_join(owner, Some(alias));
+        let prefix = format!("{}.", first.table);
+        for (column, value) in &path.conditions {
+            let column = column
+                .strip_prefix(&prefix)
+                .map_or_else(|| column.clone(), |key| format!("{alias}.{key}"));
+            join.push_str(&format!(" AND {column} = '{}'", value.replace('\'', "''")));
         }
-        expr.node
-            .for_each_child(&mut |child| collect_preloads(child, out));
-    }
-    for scope in &path.scopes {
-        collect_preloads(scope, &mut preloads);
-    }
+        Some(join)
+    } else {
+        None
+    };
+    let preloads = scoped_preloads(&path.scopes);
     Ok(AssociationPlan {
         target: last.target.clone(),
         table: last.table.clone(),
@@ -116,10 +128,27 @@ pub fn resolve(
         group_column: format!("{}.{}", first.table, first.target_key),
         joins,
         owner_join,
+        aliased_owner_join,
         conditions: path.conditions,
         scopes: path.scopes,
         preloads,
     })
+}
+
+fn scoped_preloads(scopes: &[Expr]) -> Vec<Expr> {
+    fn collect(expr: &Expr, out: &mut Vec<Expr>) {
+        if let ExprNode::Send { method, args, .. } = &*expr.node {
+            if matches!(method.as_str(), "includes" | "preload" | "eager_load") {
+                out.extend(args.iter().cloned());
+            }
+        }
+        expr.node.for_each_child(&mut |child| collect(child, out));
+    }
+    let mut preloads = Vec::new();
+    for scope in scopes {
+        collect(scope, &mut preloads);
+    }
+    preloads
 }
 
 fn resolve_path(
@@ -151,6 +180,9 @@ fn resolve_path(
             .find(|a| a.name() == through)
             .ok_or_else(|| format!("missing through association {through}"))?;
         let mut first = resolve_path(models, owner, via, None, depth + 1)?;
+        if !scoped_preloads(&first.scopes).is_empty() {
+            return Err("preloads on a through intermediate association are not supported".into());
+        }
         let intermediate = models
             .iter()
             .find(|m| m.name == first.hops.last().unwrap().target)
@@ -306,7 +338,7 @@ fn qualified_scope(scope: Option<&Expr>, table: &str) -> Result<Vec<Expr>, Strin
                 continue;
             }
             if let ExprNode::Hash { entries, .. } = &mut *arg.node {
-                for (key, _) in entries {
+                for (key, value) in entries {
                     let name = match &*key.node {
                         ExprNode::Lit {
                             value: Literal::Sym { value },
@@ -316,6 +348,9 @@ fn qualified_scope(scope: Option<&Expr>, table: &str) -> Result<Vec<Expr>, Strin
                         } => value.as_str(),
                         _ => return Err("dynamic association scope key".into()),
                     };
+                    if method.as_str() == "where" && matches!(&*value.node, ExprNode::Hash { .. }) {
+                        continue;
+                    }
                     if !name.contains('.') {
                         *key = string(&format!("{table}.{name}"));
                     }
@@ -408,6 +443,10 @@ impl AssociationPlan {
 }
 
 pub(crate) fn graft(scope: &Expr, seed: Expr) -> Expr {
+    graft_chain(scope, &seed).unwrap_or(seed)
+}
+
+fn graft_chain(scope: &Expr, seed: &Expr) -> Option<Expr> {
     let ExprNode::Send {
         recv,
         method,
@@ -416,21 +455,21 @@ pub(crate) fn graft(scope: &Expr, seed: Expr) -> Expr {
         parenthesized,
     } = &*scope.node
     else {
-        return seed;
+        return None;
     };
-    Expr::new(
+    Some(Expr::new(
         scope.span,
         ExprNode::Send {
             recv: Some(match recv {
-                Some(r) => graft(r, seed),
-                None => seed,
+                Some(r) => graft_chain(r, seed)?,
+                None => seed.clone(),
             }),
             method: method.clone(),
             args: args.clone(),
             block: block.clone(),
             parenthesized: *parenthesized,
         },
-    )
+    ))
 }
 
 fn string(value: &str) -> Expr {

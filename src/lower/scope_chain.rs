@@ -1267,11 +1267,8 @@ pub fn build_assoc_registry(models: &[Model]) -> AssocRegistry {
             }
             if let Ok(plan) = crate::lower::association_plan::resolve(models, m, a) {
                 let key = (m.name.clone(), a.name().clone());
-                reg.join_tails.insert(key.clone(), plan.owner_join.clone());
-                if plan.joins.is_empty() && a.name().as_str() != plan.table {
-                    let alias = a.name();
-                    let tail = plan.owner_join.replacen(&format!("{} ON ", plan.table), &format!("{} {alias} ON ", plan.table), 1)
-                        .replace(&format!("{}.", plan.table), &format!("{alias}."));
+                reg.join_tails.insert(key.clone(), plan.owner_join);
+                if let Some(tail) = plan.aliased_owner_join {
                     reg.aliased_join_tails.insert(key, tail);
                 }
             }
@@ -4376,6 +4373,28 @@ mod tests {
             matches!(&*r.node, ExprNode::Send { recv: None, .. }),
             "a non-association bare read keeps its shape, got {:?}",
             r.node
+        );
+    }
+
+    #[test]
+    fn registry_aliases_only_the_target_side_of_self_joins() {
+        let person = ingest(
+            "class Person < ApplicationRecord\n  belongs_to :manager, class_name: 'Person', foreign_key: :manager_id\n  has_many :reports, class_name: 'Person', foreign_key: :manager_id\nend\n",
+            "app/models/person.rb",
+        );
+        let registry = build_assoc_registry(&[person]);
+        let owner = ClassId(Symbol::from("Person"));
+        assert_eq!(
+            registry
+                .aliased_join_tail(&owner, &Symbol::from("manager"))
+                .map(String::as_str),
+            Some("people manager ON manager.id = people.manager_id"),
+        );
+        assert_eq!(
+            registry
+                .aliased_join_tail(&owner, &Symbol::from("reports"))
+                .map(String::as_str),
+            Some("people reports ON reports.manager_id = people.id"),
         );
     }
 

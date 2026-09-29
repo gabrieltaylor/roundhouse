@@ -8,6 +8,7 @@ use crate::dialect::{
 use crate::effect::EffectSet;
 use crate::expr::{Expr, ExprNode, LValue, Literal};
 use crate::ident::{ClassId, Symbol};
+use crate::lower::association_plan::graft;
 use crate::span::Span;
 use crate::ty::Ty;
 
@@ -434,7 +435,7 @@ fn synth_has_many_reader(
     // arel fold then carries the ORDER BY into the compiled SQL (or the
     // chain falls back to the runtime Relation, which evaluates it).
     let lazy_query = match scope {
-        Some(scope_expr) => graft_scope(scope_expr, lazy_query),
+        Some(scope_expr) => graft(scope_expr, lazy_query),
         None => lazy_query,
     };
 
@@ -600,9 +601,6 @@ fn synth_has_many_id_reader(owner: &ClassId, name: &Symbol, primary_key: &Symbol
         receiver: MethodReceiver::Instance,
         params: Vec::new(),
         body,
-        // `id` is `Integer` on every model, so unlike `pluck` (whose
-        // own RBS hands back `Array[untyped]`) this projection can name
-        // the element type it actually produces.
         signature: Some(fn_sig(vec![], Ty::Array { elem: Box::new(key_ty) })),
         effects: EffectSet::default(),
         enclosing_class: Some(owner.0.clone()),
@@ -760,38 +758,6 @@ fn extension_relation_method(name: &str) -> bool {
     )
 }
 
-/// Re-root an association-scope chain onto `base`: walk the scope's
-/// Send spine to its leftmost implicit-self call and substitute `base`
-/// as that call's receiver. Returns `base` unchanged when the scope's
-/// root isn't an implicit-self Send (a shape the graft can't express —
-/// better the unscoped query than a mangled one; the gap stays visible
-/// as a behavioral diff, not a corrupt emit).
-fn graft_scope(scope: &Expr, base: Expr) -> Expr {
-    fn reroot(e: &Expr, base: Expr) -> Option<Expr> {
-        let ExprNode::Send { recv, method, args, block, parenthesized } = &*e.node else {
-            return None;
-        };
-        let new_recv = match recv {
-            None => base,
-            Some(inner) => reroot(inner, base)?,
-        };
-        Some(Expr::new(
-            e.span,
-            ExprNode::Send {
-                recv: Some(new_recv),
-                method: method.clone(),
-                args: args.clone(),
-                block: block.clone(),
-                parenthesized: *parenthesized,
-            },
-        ))
-    }
-    match reroot(scope, base.clone()) {
-        Some(grafted) => grafted,
-        None => base,
-    }
-}
-
 /// has_one reader — the scoped has_many query narrowed to one row.
 fn synth_has_one_reader(
     owner: &ClassId,
@@ -833,7 +799,7 @@ fn synth_has_one_reader(
             parenthesized: true,
         },
     );
-    let query = scope.map(|s| graft_scope(s, query.clone())).unwrap_or(query);
+    let query = scope.map(|s| graft(s, query.clone())).unwrap_or(query);
     let first = Expr::new(
         Span::synthetic(),
         ExprNode::Send {
@@ -1024,7 +990,7 @@ fn synth_belongs_to_reader(
 
     let find_by = if let Some(scope) = scope {
         Expr::new(Span::synthetic(), ExprNode::Send {
-            recv: Some(graft_scope(scope, find_by)), method: Symbol::from("first"),
+            recv: Some(graft(scope, find_by)), method: Symbol::from("first"),
             args: vec![], block: None, parenthesized: false,
         })
     } else { find_by };
