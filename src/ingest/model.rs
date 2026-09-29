@@ -1521,6 +1521,7 @@ fn ty_of_column(t: &ColumnType) -> Ty {
         ColumnType::Json => Ty::Str,
         ColumnType::Uuid => Ty::Str,
         ColumnType::Reference { .. } => Ty::Int,
+        ColumnType::Array { element } => Ty::Array { elem: Box::new(ty_of_column(element)) },
     }
 }
 

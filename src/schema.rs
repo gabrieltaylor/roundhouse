@@ -1,7 +1,8 @@
 //! The database-schema IR: tables, columns, indexes, and foreign keys
 //! in target-neutral form. `ingest::schema` builds it from
-//! `db/schema.rb` — or by folding `db/migrate/*.rb` in timestamp order
-//! when no schema.rb ships — and `ingest::sequel_migration` produces
+//! `db/schema.rb` or PostgreSQL `db/structure.sql` — or by folding
+//! `db/migrate/*.rb` in timestamp order when no usable dump ships.
+//! `ingest::sequel_migration` produces
 //! the same shape for non-Rails apps. This is the pipeline's root
 //! type-evidence source: model ingest derives each model's attribute
 //! types from its table's columns, so a column's `ColumnType` and
@@ -16,6 +17,8 @@ use crate::ident::{Symbol, TableRef};
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Schema {
     pub tables: IndexMap<Symbol, Table>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub postgresql: Option<PostgresSchema>,
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -24,6 +27,8 @@ pub struct Table {
     pub columns: Vec<Column>,
     pub indexes: Vec<Index>,
     pub foreign_keys: Vec<ForeignKey>,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub check_constraints: Vec<CheckConstraint>,
     /// `create_virtual_table "message_search_index", "fts5", ["body",
     /// "tokenize=porter"]` — a table the DB builds from a MODULE rather
     /// than from a column list. It has no rowid column of its own, no
@@ -74,6 +79,7 @@ pub enum ColumnType {
     /// per-dialect renderer can still tell the two apart.
     Uuid,
     Reference { table: TableRef },
+    Array { element: Box<ColumnType> },
 }
 
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
@@ -101,4 +107,17 @@ pub enum ReferentialAction {
     Cascade,
     SetNull,
     SetDefault,
+}
+
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct PostgresSchema {
+    pub enums: IndexMap<Symbol, Vec<String>>,
+    /// PostgreSQL declarations retained as evidence, never executed or emitted as portable DDL.
+    pub declarations: Vec<String>,
+}
+
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+pub struct CheckConstraint {
+    pub name: Option<Symbol>,
+    pub expression: String,
 }

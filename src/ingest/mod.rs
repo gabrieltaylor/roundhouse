@@ -32,6 +32,8 @@ pub mod rate_limit;
 pub mod roda_app;
 pub mod routes;
 pub mod schema;
+mod schema_source;
+pub mod structure_sql;
 pub mod sequel_migration;
 pub mod sequel_model;
 pub mod sorbet_sig;

@@ -40,13 +40,28 @@ reaches the others as their emitters and runtimes catch up.
 
 | | Blog tier (all targets) | Campfire tier (ruby, spinel) |
 |---|---|---|
-| Attributes | From `db/schema.rb` (migrations as fallback), typed per column; `id`, timestamps, defaults, nullability | + `enum`, `serialize`/`has_json` columns, `has_secure_token`, `has_secure_password` (real bcrypt) |
+| Attributes | From `db/schema.rb` or PostgreSQL `db/structure.sql` (migrations as fallback), typed per column; `id`, timestamps, defaults, nullability | + `enum`, `serialize`/`has_json` columns, `has_secure_token`, `has_secure_password` (real bcrypt) |
 | Associations | `belongs_to`, `has_many` (with `dependent:`), `has_one`; association readers, builders, `<assoc>_ids` | + `has_many :through`, polymorphic, `touch:`, `has_one_attached`/`has_many_attached`, `has_rich_text` |
 | Validations | `presence`, `absence`, `length` (min/max), `numericality` (bounds, `only_integer`), `format`, `inclusion`, `uniqueness`; `errors`, `full_messages`, `valid?` | + custom `validate` methods, conditional `if:`/`unless:` |
 | Callbacks | `after_create_commit` and the Turbo `broadcasts_to` family | + `before_save`/`after_save`, `before_destroy`, `after_touch`, STI-aware callback inheritance |
 | Queries | `where` (hash and string), `order`, `limit`, `find`, `find_by`, `first`/`last`, `count`, `exists?`, `includes`, `pluck`, named `scope`s — folded to SQL by the Arel builder | + `joins`, `left_joins`, `group`/`count`, `select`, `distinct`, `or`, `none`, `find_or_create_by`, `insert_all`, `update_all`, `in_batches`, `sum`; a live `Relation` for chains the builder can't fold |
 | Persistence | `create`, `save`, `update`, `destroy`, `new`/`build` | + `destroy!`, `increment!`, `update_columns`, transactions, dirty tracking predicates |
 | STI | — | `type` column dispatch, subclass scopes, `is_a?` on records |
+
+PostgreSQL dumps share the same attribute inference as Ruby schema dumps.
+[Schema source selection](check.md#database-schema-sources) honors a statically
+resolved `schema_format` and reports ambiguity instead of using a possibly stale
+file. The generic `fixtures/postgres-blog` fixture covers scalar types, enum
+labels, defaults, serial/identity keys, indexes, foreign keys and checks;
+`tests/structure_sql.rs` compares its model attributes with an equivalent Ruby
+schema and pins unsupported-DDL diagnostics.
+
+Database behavior has a separate coverage boundary: SQL functions, triggers,
+extensions, views, row security, expression/partial indexes, generated columns,
+composite-key runtime behavior and unknown types are ingest gaps. Arrays carry
+their inferred element types in survey mode, with a persistence gap. PostgreSQL
+check/FK enforcement, enum restrictions, expression defaults and sequence
+options are retained schema evidence, not new portable runtime support.
 
 ## Action Controller
 

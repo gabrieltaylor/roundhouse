@@ -138,7 +138,8 @@ fn sqlite_type(ct: &ColumnType) -> &'static str {
         | ColumnType::DateTime
         | ColumnType::Time
         | ColumnType::Json
-        | ColumnType::Uuid => "TEXT",
+        | ColumnType::Uuid
+        | ColumnType::Array { .. } => "TEXT",
         ColumnType::Reference { .. } => "INTEGER",
     }
 }

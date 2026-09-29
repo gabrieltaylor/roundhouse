@@ -1121,10 +1121,11 @@ mod tests {
                 ],
                 indexes: vec![],
                 foreign_keys: vec![],
+                check_constraints: vec![],
                 virtual_module: None,
             },
         );
-        (Schema { tables }, ClassId(Symbol::from("Article")))
+        (Schema { tables, ..Schema::default() }, ClassId(Symbol::from("Article")))
     }
 
     fn id_col() -> ColRef {

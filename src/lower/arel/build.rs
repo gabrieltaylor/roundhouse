@@ -669,10 +669,11 @@ mod tests {
                 ],
                 indexes: vec![],
                 foreign_keys: vec![],
+                check_constraints: vec![],
                 virtual_module: None,
             },
         );
-        let schema = Schema { tables };
+        let schema = Schema { tables, ..Schema::default() };
 
         let mut registry = HashMap::new();
         let mut comment_info = ClassInfo::default();
