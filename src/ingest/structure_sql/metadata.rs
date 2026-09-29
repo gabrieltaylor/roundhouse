@@ -19,7 +19,10 @@ impl Reader<'_> {
                 match tokens.get(3).map(|t| &t.token) {
                     Some(Token::SingleQuotedString(value)) => self.set_namespace(value)?,
                     Some(Token::Word(_)) => self.set_namespace(&text(&tokens[3..]))?,
-                    _ => self.gap("unsupported search_path setting")?,
+                    _ => {
+                        self.namespace = None;
+                        self.gap("unsupported search_path setting")?;
+                    }
                 }
                 return Ok(true);
             }
@@ -89,8 +92,12 @@ impl Reader<'_> {
             let mut parser =
                 Parser::new(&PostgreSqlDialect {}).with_tokens_with_locations(tokens[2..].to_vec());
             if let Ok(name) = parser.parse_object_name(false) {
-                let name = self.name(&name)?;
-                if matches!(name.as_str(), "schema_migrations" | "ar_internal_metadata") {
+                let name = super::unqualified_name(&name)
+                    .or_else(|| self.name(&name).ok().map(|name| name.as_str().to_string()));
+                if matches!(
+                    name.as_deref(),
+                    Some("schema_migrations" | "ar_internal_metadata")
+                ) {
                     return Ok(true);
                 }
             }
@@ -99,8 +106,8 @@ impl Reader<'_> {
     }
 
     fn set_namespace(&mut self, path: &str) -> IngestResult<()> {
+        self.namespace = None;
         if path.is_empty() {
-            self.namespace = "public".into();
             return Ok(());
         }
         let tokens = Tokenizer::new(&PostgreSqlDialect {}, path).tokenize().ok();
@@ -108,12 +115,15 @@ impl Reader<'_> {
             .as_ref()
             .and_then(|t| t.iter().find(|t| !matches!(t, Token::Whitespace(_))))
         {
-            Some(Token::Word(w)) if w.value != "$user" => {
-                self.namespace = if w.quote_style.is_some() {
+            Some(Token::Word(w))
+                if w.value != "$user"
+                    && (w.quote_style.is_some() || !w.value.eq_ignore_ascii_case("default")) =>
+            {
+                self.namespace = Some(if w.quote_style.is_some() {
                     w.value.clone()
                 } else {
                     w.value.to_lowercase()
-                };
+                });
                 Ok(())
             }
             _ => self.gap(format!("cannot statically resolve search_path {path}")),

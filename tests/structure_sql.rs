@@ -446,14 +446,38 @@ fn user_dependent_search_paths_report_gaps_in_all_setting_forms() {
         survey::activate();
         let schema = parse(&sql);
         let gaps = survey::drain();
-        assert_eq!(gaps.len(), 1, "{setting}: {gaps:?}");
+        assert_eq!(gaps.len(), 2, "{setting}: {gaps:?}");
         assert!(
             gaps[0]
                 .to_string()
                 .contains("cannot statically resolve search_path")
         );
         assert!(!schema.tables.contains_key(&Symbol::from("$user.records")));
+        assert!(!schema.tables.contains_key(&Symbol::from("records")));
         assert!(schema.tables.contains_key(&Symbol::from("qualified")));
+    }
+}
+
+#[test]
+fn unresolved_search_paths_invalidate_previous_namespaces_until_reset() {
+    for setting in [
+        r#"SET search_path = "$user", public"#,
+        "SET search_path = DEFAULT",
+        "SET search_path = ''",
+        "SELECT pg_catalog.set_config('search_path', '', false)",
+    ] {
+        survey::activate();
+        let schema = parse(&format!(
+            "SET search_path = archive; {setting};
+             CREATE TABLE misplaced (id bigint);
+             CREATE TABLE public.qualified (id bigint);
+             SET search_path = restored;
+             CREATE TABLE records (id bigint);"
+        ));
+        let gaps = survey::drain();
+        assert!(!gaps.is_empty(), "{setting}");
+        let names: Vec<_> = schema.tables.keys().map(Symbol::as_str).collect();
+        assert_eq!(names, ["qualified", "restored.records"], "{setting}");
     }
 }
 

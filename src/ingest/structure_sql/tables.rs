@@ -316,7 +316,10 @@ impl Reader<'_> {
         let name = index
             .name
             .as_ref()
-            .map(|n| self.name(n))
+            .map(|name| {
+                super::unqualified_name(name)
+                    .map_or_else(|| self.name(name), |name| Ok(Symbol::from(name)))
+            })
             .transpose()?
             .unwrap_or_else(|| Symbol::from(format!("{table_name}_index")));
         let columns = index_columns(&index.columns);

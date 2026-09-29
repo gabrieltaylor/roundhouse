@@ -45,12 +45,12 @@ impl Reader<'_> {
             DataType::Timestamp(..) => ColumnType::DateTime,
             DataType::Time(..) => ColumnType::Time,
             DataType::Custom(name, _)
-                if self
-                    .schema
-                    .postgresql
-                    .as_ref()?
-                    .enums
-                    .contains_key(&self.name(name).ok()?) =>
+                if self.name(name).ok().is_some_and(|name| {
+                    self.schema
+                        .postgresql
+                        .as_ref()
+                        .is_some_and(|pg| pg.enums.contains_key(&name))
+                }) =>
             {
                 ColumnType::String { limit: None }
             }

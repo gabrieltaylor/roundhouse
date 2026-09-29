@@ -33,7 +33,7 @@ pub fn ingest_structure_sql(source: &[u8], file: &str) -> IngestResult<Schema> {
         },
         file,
         line: 1,
-        namespace: "public".into(),
+        namespace: Some("public".into()),
     };
     let mut statement = Vec::new();
     let mut meta = false;
@@ -64,16 +64,19 @@ struct Reader<'a> {
     schema: Schema,
     file: &'a str,
     line: u64,
-    namespace: String,
+    namespace: Option<String>,
 }
 
 impl Reader<'_> {
-    fn gap(&self, message: impl std::fmt::Display) -> IngestResult<()> {
-        survey::unwrap_or_record::<()>(Err(IngestError::Unsupported {
+    fn unsupported(&self, message: impl std::fmt::Display) -> IngestError {
+        IngestError::Unsupported {
             file: self.file.into(),
             message: format!("PostgreSQL schema: {message} (line {})", self.line),
-        }))
-        .map(|_| ())
+        }
+    }
+
+    fn gap(&self, message: impl std::fmt::Display) -> IngestResult<()> {
+        survey::unwrap_or_record::<()>(Err(self.unsupported(message))).map(|_| ())
     }
 
     fn meta(&mut self, tokens: &[TokenWithSpan]) -> IngestResult<()> {
@@ -157,15 +160,19 @@ impl Reader<'_> {
             .map(ident_value)
             .collect();
         let value = match parts.as_slice() {
-            [name] if self.namespace == "public" => name.clone(),
-            [name] => format!("{}.{name}", self.namespace),
+            [name] => match self.namespace.as_deref() {
+                Some("public") => name.clone(),
+                Some(schema) => format!("{schema}.{name}"),
+                None => {
+                    return Err(self.unsupported(format!(
+                        "unqualified name {name} has no statically resolved search_path"
+                    )));
+                }
+            },
             [schema, name] if schema == "public" || schema == "pg_catalog" => name.clone(),
             [schema, name] => format!("{schema}.{name}"),
             _ => {
-                return Err(IngestError::Unsupported {
-                    file: self.file.into(),
-                    message: format!("unsupported PostgreSQL qualified name {name}"),
-                });
+                return Err(self.unsupported(format!("unsupported qualified name {name}")));
             }
         };
         Ok(Symbol::from(value))
@@ -178,6 +185,13 @@ fn ident_value(ident: &sql::Ident) -> String {
     } else {
         ident.value.to_lowercase()
     }
+}
+
+fn unqualified_name(name: &sql::ObjectName) -> Option<String> {
+    let [part] = name.0.as_slice() else {
+        return None;
+    };
+    part.as_ident().map(ident_value)
 }
 
 fn word(token: &Token, expected: &str) -> bool {
