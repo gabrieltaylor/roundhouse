@@ -4,7 +4,7 @@ A family of files under a Rails app are not treated as general code —
 they're recognized as declarative inputs and ingested into dedicated
 IR structures. The four covered in depth here are `db/schema.rb`,
 `config/routes.rb`, `db/seeds.rb`, and `config/importmap.rb`; the
-same family also takes in test fixtures (below), `db/migrate/`
+same family also takes in PostgreSQL `db/structure.sql`, test fixtures (below), `db/migrate/`
 migrations (below), `config/routes/` split files, and `sig/**/*.rbs`
 RBS sidecars (`App::rbs_signatures`, parsed by `src/rbs.rs`). This
 doc covers what each one contributes, the IR shape it produces, and
@@ -27,11 +27,11 @@ directly; `src/emit/roda.rs` writes `db/migrate` files from
 See [`../pipeline/lower.md`](../pipeline/lower.md) for the two-shape
 contract.
 
-## `db/schema.rb` → `Schema` → `Schema.statements`
+## Schema dumps → `Schema` → `Schema.statements`
 
 **Source IR:** `src/schema.rs::Schema` — an `IndexMap<Symbol, Table>`.
 Each `Table` carries its columns (typed via `ColumnType`), indexes,
-and foreign-key declarations. Iteration order is source order, so
+foreign keys, and check-constraint declarations. Iteration order is source order, so
 downstream consumers (schema DDL lowering, persistence lowering, model
 attribute seeding) produce deterministic output.
 
@@ -215,21 +215,23 @@ one process so this isn't an issue.
 
 ## What about migrations?
 
-`db/schema.rb` is canonical whenever it exists, because:
+`src/ingest/schema_source.rs` selects a schema dump before model ingestion.
+A statically resolved Rails `schema_format` chooses its matching dump; absent
+configuration, a lone `db/schema.rb` or `db/structure.sql` is used. Ambiguous or
+dynamic configuration is a gap, never a reason to guess which file is current.
+See the [source-selection rules](../guide/check.md#database-schema-sources).
 
-1. `schema.rb` is the denormalized, authoritative snapshot — the same
-   view every `rails db:prepare` would construct.
-2. Migrations are imperative; schema.rb is declarative. Typing against
-   the final shape is straightforward; replaying migrations to derive
-   it is avoidable work.
+`src/ingest/structure_sql/` tokenizes and parses PostgreSQL dump statements
+without executing SQL. It feeds the same `Schema`/`Table`/`Column` types as the
+Ruby DSL reader, with enum labels and PostgreSQL declarations retained
+in `Schema.postgresql`, and check expressions in `Table.check_constraints`.
+Unsupported DDL uses the normal strict/survey ingest-gap mechanism; in survey
+mode supported tables survive functions, triggers and other unsupported objects.
+These facts do not extend the portable renderer's database behavior.
 
-When `schema.rb` is absent (never migrated locally, or gitignored),
-the walk falls back to folding `db/migrate/*.rb` in filename order —
-`src/ingest/schema.rs::ingest_migration`, called from
-`src/ingest/app.rs`. Migration shapes it can't fold deterministically
-(see `UNSUPPORTED_VERBS`) error with a pointer to `rails db:migrate`,
-which materializes the schema.rb this fallback substitutes for. Roda
-apps get the same fallback for Sequel-DSL migrations via
+Without a usable dump, `src/ingest/schema.rs::ingest_migration` folds
+`db/migrate/*.rb` in filename order. Migration shapes it cannot fold remain
+explicit gaps. Roda apps have the equivalent Sequel fallback in
 `src/ingest/sequel_migration.rs`.
 
 The real-blog fixture generator (`scripts/create-blog`) runs

@@ -102,8 +102,8 @@ pub fn ingest_schema(source: &[u8], file: &str) -> IngestResult<Schema> {
 /// `change` exists; `down` is never touched). Schema-mutating verbs we
 /// can't fold deterministically (`change_table`, `execute`, raw-SQL
 /// shapes — see `UNSUPPORTED_VERBS`) error with a pointer to
-/// `rails db:migrate`, which materializes the schema.rb this fallback
-/// substitutes for. Receiver-less calls that aren't recognized verbs
+/// a current schema.rb or PostgreSQL structure.sql dump. Receiver-less
+/// calls that aren't recognized verbs
 /// are ignored: migrations legitimately contain arbitrary Ruby (data
 /// backfills, `say`, …) that doesn't affect the schema.
 pub fn ingest_migration(source: &[u8], file: &str, schema: &mut Schema) -> IngestResult<()> {
@@ -174,8 +174,8 @@ fn apply_migration_verb(
         return Err(IngestError::Unsupported {
             file: file.into(),
             message: format!(
-                "migration verb `{verb}` not supported by the schema fold — run \
-                 `rails db:migrate` to materialize db/schema.rb"
+                "migration verb `{verb}` not supported by the schema fold — provide \
+                 a current db/schema.rb or PostgreSQL db/structure.sql dump"
             ),
         });
     }
@@ -547,6 +547,7 @@ fn table_from_create_table(
             columns,
             indexes,
             foreign_keys: vec![],
+            check_constraints: vec![],
             virtual_module: None,
         },
     ))
@@ -592,6 +593,7 @@ fn virtual_table_from_call(call: &ruby_prism::CallNode<'_>) -> Option<(Symbol, T
             columns,
             indexes: vec![],
             foreign_keys: vec![],
+            check_constraints: vec![],
             virtual_module: Some(crate::schema::VirtualModule { module, args: module_args }),
         },
     ))
@@ -633,6 +635,7 @@ fn view_from_create_view(
             columns,
             indexes: vec![],
             foreign_keys: vec![],
+            check_constraints: vec![],
             virtual_module: None,
         },
     ))
@@ -1034,7 +1037,7 @@ mod tests {
         .unwrap_err();
         let msg = err.to_string();
         assert!(msg.contains("execute"), "names the verb: {msg}");
-        assert!(msg.contains("rails db:migrate"), "points at the fix: {msg}");
+        assert!(msg.contains("db/structure.sql"), "points at a schema dump: {msg}");
     }
 
     #[test]

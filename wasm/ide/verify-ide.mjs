@@ -23,6 +23,7 @@
 //   node verify-ide.mjs            # (run from wasm/ide/)
 
 import { createRequire } from "node:module";
+import { wantsPath } from "../lib/bundle-rules.mjs";
 const require = createRequire(new URL("../../tests/browser_smoke/", import.meta.url).pathname);
 const { chromium } = require("playwright");
 
@@ -290,8 +291,7 @@ check("open folder: status says nothing was uploaded", /nothing uploaded/.test(l
 // files (Gemfile.lock among them — the gem census reads it), nothing
 // else (real-blog has test/, bin/, public/… on disk).
 check("open folder: only analyzable sources were read",
-  local.paths.every((p) => /^(app|extras|lib|config\/routes|models|views|db\/migrate)\//.test(p)
-    || ["db/schema.rb", "config/routes.rb", "config.ru", "app.rb", "db.rb", "seeds.rb", "Gemfile.lock"].includes(p))
+  local.paths.every(wantsPath)
   && local.paths.includes("config/routes.rb") && local.paths.includes("db/schema.rb")
   && local.paths.includes("Gemfile.lock")
   && local.paths.some((p) => p.startsWith("app/models/")),

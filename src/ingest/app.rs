@@ -29,7 +29,6 @@ use super::library_class::{
 };
 use super::model::ingest_model;
 use super::routes::ingest_routes_with_draws;
-use super::schema::{ingest_migration, ingest_schema};
 use super::test::ingest_test_files;
 use super::view::{ViewEngine, ingest_template};
 use super::survey::{self, unwrap_or_record};
@@ -226,34 +225,7 @@ pub fn ingest_app_with_vfs<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestResult
         }
     }
 
-    let schema_path = dir.join("db/schema.rb");
-    if vfs.exists(&schema_path) {
-        let source = vfs.read(&schema_path)?;
-        if let Some(schema) =
-            unwrap_or_record(ingest_schema(&source, &schema_path.display().to_string()))?
-        {
-            app.schema = schema;
-        }
-    } else {
-        // No schema.rb (never migrated locally, gitignored, or a
-        // migrations-only app) — recover the same column facts by
-        // folding db/migrate/*.rb in filename order (timestamp
-        // prefixes sort chronologically). schema.rb stays canonical
-        // when both exist: it's the already-folded form.
-        let migrate_dir = dir.join("db/migrate");
-        if vfs.is_dir(&migrate_dir) {
-            let mut schema = crate::schema::Schema::default();
-            for entry in read_rb_files(vfs, &migrate_dir)? {
-                let source = vfs.read(&entry)?;
-                unwrap_or_record(ingest_migration(
-                    &source,
-                    &entry.display().to_string(),
-                    &mut schema,
-                ))?;
-            }
-            app.schema = schema;
-        }
-    }
+    app.schema = super::schema_source::ingest_app_schema(vfs, dir)?;
 
     let models_dir = dir.join("app/models");
     // A namespace's `table_name_prefix` has to be known BEFORE the model

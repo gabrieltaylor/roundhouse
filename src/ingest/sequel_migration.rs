@@ -110,6 +110,7 @@ fn ingest_table_stmt(
                 columns: Vec::new(),
                 indexes: Vec::new(),
                 foreign_keys: Vec::new(),
+                check_constraints: Vec::new(),
                 virtual_module: None,
             };
             if let Some(body) =

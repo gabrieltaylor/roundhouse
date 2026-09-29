@@ -10,15 +10,55 @@ roundhouse check --continue /path/to/your/rails/app
 ```
 
 Nothing is booted and nothing is installed. The analyzer reads
-`db/schema.rb` (or the migrations), `config/routes.rb`, the models,
+`db/schema.rb` or PostgreSQL `db/structure.sql` (migrations as fallback),
+`config/routes.rb`, the models,
 controllers, concerns, helpers, views and `Gemfile.lock`, and infers
 from Rails' own conventions what was never written down: which class
 `has_many :comments` returns, what a column deserializes to, whether a
 `find_by` can come back nil.
 
+## Database schema sources
+
+Roundhouse reads schema dumps statically through the same filesystem interface
+used by the editor and browser. No Rails boot, database connection, migration
+execution or bundle installation is needed. Keep the app's existing schema
+format; an SQL-format app does not need a generated `schema.rb`.
+
+- A literal `config.active_record.schema_format = :sql` or `:ruby` in
+  unconditional configuration selects `db/structure.sql` or `db/schema.rb`.
+  Roundhouse inspects Ruby files under `config/`, including environment files.
+- With no setting, a single dump is selected. If both exist, Roundhouse reports
+  an ambiguous-source ingest gap instead of guessing from file timestamps.
+- Conditional, dynamic, compound-assignment or conflicting settings also report
+  a source-selection gap. A missing configured dump never selects the other
+  format as a substitute.
+- With no usable dump, migrations are folded in filename order. Missing or empty
+  dumps can fall back directly; ambiguous selection and malformed dumps stop
+  strict ingestion, while `--continue` records the gap and folds migrations.
+  A SQL dump with usable tables and unsupported DDL keeps those tables under
+  `--continue`; it does not replay migrations over them.
+
+The PostgreSQL reader accepts plain-text pg_dump DDL: tables, common scalar
+column types, nullability, defaults, primary keys, serial/identity declarations,
+simple indexes, enums, single-column foreign keys and check constraints.
+Supported literal defaults are decoded into shared schema values; SQL
+expressions and sequence declarations are retained as evidence, never run.
+Public schema names map to Rails' unqualified table names; other namespaces
+remain qualified. Quoted identifiers retain case.
+
+This is schema inference, not a PostgreSQL runtime port. Functions, triggers,
+views, extensions, row-security policies, generated expressions, unsupported
+index/constraint semantics and unknown types produce located ingest gaps.
+Arrays retain element types under `--continue` and report a persistence gap.
+Enum columns infer as strings; JSON follows the existing `schema.rb` typing.
+The existing portable schema renderer does not enforce PostgreSQL checks or
+foreign keys, enum labels, sequence options or expression defaults. Retaining
+those facts does not promise equivalent database behavior on emitted targets.
+
 ## What is read, and what you can write down
 
-Ingest walks `db/schema.rb` (or the migrations), `config/routes.rb`,
+Ingest walks `db/schema.rb` or PostgreSQL `db/structure.sql` (migrations as
+fallback), `config/routes.rb`,
 `Gemfile.lock`, and the whole of `app/`: models, controllers, views,
 helpers and concerns each have a pass of their own, and every other
 directory under `app/` — `services`, `jobs`, `interactors`,

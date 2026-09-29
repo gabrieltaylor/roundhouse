@@ -565,6 +565,7 @@ jobs:
       - name: Serve wasm/ and verify the /ide/ + /playground/ + /studio/ pages
         run: |
           set -euo pipefail
+          node --test wasm/lib/local-bundle.test.mjs
           (cd wasm && python3 -m http.server 8099 >/tmp/ide-server.log 2>&1 &)
           sleep 1
           (cd wasm/ide && node verify-ide.mjs)

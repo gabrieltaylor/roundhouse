@@ -233,6 +233,7 @@ fn sequel_column_type(ty: &ColumnType) -> (&'static str, &'static str) {
         ColumnType::Json => ("String", ", text: true # was json"),
         ColumnType::Uuid => ("String", ", fixed: true, size: 36 # was uuid"),
         ColumnType::Reference { .. } => ("Integer", " # was t.references"),
+        ColumnType::Array { .. } => ("String", ", text: true # was a PostgreSQL array"),
     }
 }
 

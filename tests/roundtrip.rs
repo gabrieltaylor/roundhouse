@@ -41,10 +41,11 @@ fn tiny_blog_round_trips() {
             ],
             indexes: vec![],
             foreign_keys: vec![],
+            check_constraints: vec![],
             virtual_module: None,
         },
     );
-    let schema = Schema { tables };
+    let schema = Schema { tables, ..Schema::default() };
 
     let mut attrs = IndexMap::new();
     attrs.insert(Symbol::from("id"), Ty::Int);
