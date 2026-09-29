@@ -243,4 +243,174 @@ module ActiveSupport
     end
     "#{head}, and #{list[n - 1]}"
   end
+
+  # Not reopened on `Time` (no built-in reopening), and not `Time#+`: day shifts go through the civil calendar so DST cannot move the clock.
+  def self.civil_days(y, m, d)
+    yy = m <= 2 ? y - 1 : y
+    era = yy / 400
+    yoe = yy - era * 400
+    doy = (153 * (m > 2 ? m - 3 : m + 9) + 2) / 5 + d - 1
+    doe = yoe * 365 + yoe / 4 - yoe / 100 + doy
+    era * 146097 + doe - 719468
+  end
+
+  def self.local_on(days, hour, min, sec, usec)
+    z = days + 719468
+    era = z / 146097
+    doe = z - era * 146097
+    yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365
+    doy = doe - (365 * yoe + yoe / 4 - yoe / 100)
+    mp = (5 * doy + 2) / 153
+    d = doy - (153 * mp + 2) / 5 + 1
+    m = mp < 10 ? mp + 3 : mp - 9
+    Time.local(yoe + era * 400 + (m <= 2 ? 1 : 0), m, d, hour, min, sec, usec)
+  end
+
+  def self.days_in_month(y, m)
+    m == 12 ? civil_days(y + 1, 1, 1) - civil_days(y, 12, 1) : civil_days(y, m + 1, 1) - civil_days(y, m, 1)
+  end
+
+  def self.days_since(t, n = 1)
+    local_on(civil_days(t.year, t.month, t.day) + n, t.hour, t.min, t.sec, t.usec)
+  end
+
+  def self.days_ago(t, n = 1)
+    days_since(t, -n)
+  end
+
+  def self.yesterday(t)
+    days_since(t, -1)
+  end
+
+  def self.tomorrow(t)
+    days_since(t, 1)
+  end
+
+  def self.weeks_since(t, n = 1)
+    days_since(t, 7 * n)
+  end
+
+  def self.weeks_ago(t, n = 1)
+    days_since(t, -7 * n)
+  end
+
+  # Not a day shift: ActiveSupport clamps to the target month's last day (Jan 31 + 1 month is Feb 28).
+  def self.months_since(t, n = 1)
+    total = t.year * 12 + t.month - 1 + n
+    y = total / 12
+    m = total % 12 + 1
+    last = days_in_month(y, m)
+    Time.local(y, m, t.day > last ? last : t.day, t.hour, t.min, t.sec, t.usec)
+  end
+
+  def self.months_ago(t, n = 1)
+    months_since(t, -n)
+  end
+
+  def self.years_since(t, n = 1)
+    months_since(t, 12 * n)
+  end
+
+  def self.years_ago(t, n = 1)
+    months_since(t, -12 * n)
+  end
+
+  def self.beginning_of_minute(t)
+    Time.local(t.year, t.month, t.day, t.hour, t.min)
+  end
+
+  # Not usec 999999: ActiveSupport's end is `.999999999`, and a Float usec rounds that down to ...998 on CRuby.
+  def self.end_of_minute(t)
+    Time.local(t.year, t.month, t.day, t.hour, t.min, 59.999999999)
+  end
+
+  def self.beginning_of_hour(t)
+    Time.local(t.year, t.month, t.day, t.hour)
+  end
+
+  def self.end_of_hour(t)
+    Time.local(t.year, t.month, t.day, t.hour, 59, 59.999999999)
+  end
+
+  def self.beginning_of_day(t)
+    Time.local(t.year, t.month, t.day)
+  end
+
+  def self.end_of_day(t)
+    Time.local(t.year, t.month, t.day, 23, 59, 59.999999999)
+  end
+
+  def self.noon(t)
+    Time.local(t.year, t.month, t.day, 12)
+  end
+
+  # Not Sunday: `Date.beginning_of_week` defaults to Monday.
+  def self.beginning_of_week(t)
+    local_on(civil_days(t.year, t.month, t.day) - (t.wday + 6) % 7, 0, 0, 0, 0)
+  end
+
+  def self.end_of_week(t)
+    end_of_day(days_since(beginning_of_week(t), 6))
+  end
+
+  def self.next_week(t)
+    beginning_of_week(days_since(t, 7))
+  end
+
+  def self.prev_week(t)
+    beginning_of_week(days_since(t, -7))
+  end
+
+  def self.beginning_of_month(t)
+    Time.local(t.year, t.month, 1)
+  end
+
+  def self.end_of_month(t)
+    Time.local(t.year, t.month, days_in_month(t.year, t.month), 23, 59, 59.999999999)
+  end
+
+  def self.beginning_of_year(t)
+    Time.local(t.year, 1, 1)
+  end
+
+  def self.end_of_year(t)
+    Time.local(t.year, 12, 31, 23, 59, 59.999999999)
+  end
+
+  def self.same_day?(a, b)
+    a.year == b.year && a.month == b.month && a.day == b.day
+  end
+
+  # Not `ActiveSupport.now` read here: the caller passes it, since this file's typing sees no clock of its own.
+  def self.today?(t, now)
+    same_day?(t, now)
+  end
+
+  def self.yesterday?(t, now)
+    same_day?(t, days_since(now, -1))
+  end
+
+  def self.tomorrow?(t, now)
+    same_day?(t, days_since(now, 1))
+  end
+
+  def self.past?(t, now)
+    t < now
+  end
+
+  def self.future?(t, now)
+    t > now
+  end
+
+  def self.on_weekend?(t)
+    t.wday == 0 || t.wday == 6
+  end
+
+  def self.on_weekday?(t)
+    !on_weekend?(t)
+  end
+
+  def self.on_wday?(t, wday)
+    t.wday == wday
+  end
 end

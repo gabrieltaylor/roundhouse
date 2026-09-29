@@ -95,18 +95,25 @@ fn json_actions_for(
     out
 }
 
-/// Actions with a `<action>.turbo_stream.erb` template, the same scan
-/// `json_actions_for` does for jbuilder. Turbo negotiates
-/// `text/vnd.turbo-stream.html` on a form submission and Rails renders
-/// that template for it; without the dispatch, an action whose ONLY
-/// template is the turbo_stream one falls through to the html branch and
-/// raises MissingTemplate (campfire's `MessagesController#create` has no
-/// `create.html.erb` at all).
-fn turbo_stream_actions_for(
-    controller: &Controller,
-    views: &[crate::dialect::View],
-) -> std::collections::HashSet<Symbol> {
-    let mut out: std::collections::HashSet<Symbol> = std::collections::HashSet::new();
+/// Each action's templates in the TEXT formats the implicit render
+/// negotiates beyond html and json, in test order: `turbo_stream`, then
+/// `js`. Same scan `json_actions_for` does for jbuilder.
+///
+/// Turbo negotiates `text/vnd.turbo-stream.html` on a form submission
+/// and Rails renders `<action>.turbo_stream.erb` for it; without the
+/// dispatch, an action whose ONLY template is the turbo_stream one falls
+/// through to the html branch and raises MissingTemplate (campfire's
+/// `MessagesController#create` has no `create.html.erb` at all).
+///
+/// `js` is the service worker: `navigator.serviceWorker.register(
+/// "/service-worker.js")` asks for format js and Rails renders campfire's
+/// raw `pwa/service_worker.js`. Without the arm the action had no
+/// template for html and answered an empty 204, which the browser
+/// refuses to register — so no push subscription could ever start.
+type TextFormatActions = std::collections::HashMap<Symbol, Vec<&'static str>>;
+
+fn text_format_actions_for(controller: &Controller, views: &[crate::dialect::View]) -> TextFormatActions {
+    let mut out = TextFormatActions::new();
     let module = match views_module_name(controller) {
         Some(m) => m,
         None => return out,
@@ -115,13 +122,18 @@ fn turbo_stream_actions_for(
     // controller's module has to go through to match a view name.
     let dir = crate::naming::underscore(&module);
     let prefix = format!("{dir}/");
-    for v in views {
-        if v.format.as_str() != "turbo_stream" {
-            continue;
-        }
-        if let Some(stem) = v.name.as_str().strip_prefix(&prefix) {
-            if !stem.starts_with('_') {
-                out.insert(Symbol::from(stem));
+    for fmt in ["turbo_stream", "js"] {
+        for v in views {
+            if v.format.as_str() != fmt || v.jbuilder {
+                continue;
+            }
+            if let Some(stem) = v.name.as_str().strip_prefix(&prefix) {
+                if !stem.starts_with('_') {
+                    let fmts = out.entry(Symbol::from(stem)).or_default();
+                    if !fmts.contains(&fmt) {
+                        fmts.push(fmt);
+                    }
+                }
             }
         }
     }
@@ -313,13 +325,13 @@ pub fn lower_controllers_with_arel_views_assocs_and_routes(
     let mut all_methods: Vec<(Vec<MethodDef>, &Controller)> = Vec::new();
     for controller in controllers {
         let json_actions = json_actions_for(controller, views);
-        let turbo_stream_actions = turbo_stream_actions_for(controller, views);
+        let text_format_actions = text_format_actions_for(controller, views);
         // `Some(map)` → this controller's routed actions (empty set if it
         // has no routes, e.g. a base controller → all publics are helpers).
         // `None` → legacy: every public method is an action.
         let routed = routed_by_controller
             .map(|m| m.get(&controller.name).cloned().unwrap_or_default());
-        let methods = build_methods(controller, controllers, &params_specs, &json_actions, &turbo_stream_actions, routed.as_ref(), &view_ivars, &partials, format_breadth, route_id_segments, inferred_params);
+        let methods = build_methods(controller, controllers, &params_specs, &json_actions, &text_format_actions, routed.as_ref(), &view_ivars, &partials, format_breadth, route_id_segments, inferred_params);
         all_methods.push((methods, controller));
     }
     subclass_template_hooks(&mut all_methods, controllers, &view_ivars, &partials);
@@ -596,7 +608,7 @@ pub fn lower_controller_to_library_class(controller: &Controller) -> LibraryClas
         std::slice::from_ref(controller),
         &specs,
         &std::collections::HashSet::new(),
-        &std::collections::HashSet::new(),
+        &TextFormatActions::new(),
         None,
         &view_ivars,
         &partials,
@@ -820,7 +832,7 @@ fn build_methods(
     all_controllers: &[Controller],
     params_specs: &ParamsSpecs,
     json_actions: &std::collections::HashSet<Symbol>,
-    turbo_stream_actions: &std::collections::HashSet<Symbol>,
+    text_format_actions: &TextFormatActions,
     routed: Option<&std::collections::HashSet<Symbol>>,
     view_ivars: &ViewIvarMap,
     partials: &PartialMap,
@@ -1036,7 +1048,7 @@ fn build_methods(
         methods.push(action_to_method(
             a, controller, all_controllers, &privs, &params_privs, /*is_public=*/ true,
             params_specs, json_actions,
-            turbo_stream_actions, view_ivars,
+            text_format_actions, view_ivars,
             partials, format_breadth, &shadows, route_id_segments, inferred_params,
             &deferred_renders, &mut deferred_tails,
         ));
@@ -1063,7 +1075,7 @@ fn build_methods(
         methods.push(action_to_method(
             a, controller, all_controllers, &privs, &params_privs, /*is_public=*/ false,
             params_specs, json_actions,
-            turbo_stream_actions, view_ivars,
+            text_format_actions, view_ivars,
             partials, format_breadth, &shadows, route_id_segments, inferred_params,
             &no_deferred, &mut std::collections::HashMap::new(),
         ));
@@ -1076,7 +1088,7 @@ fn build_methods(
         methods.push(action_to_method(
             a, controller, all_controllers, &privs, &params_privs, /*is_public=*/ false,
             params_specs, json_actions,
-            turbo_stream_actions, view_ivars,
+            text_format_actions, view_ivars,
             partials, format_breadth, &shadows, route_id_segments, inferred_params,
             &no_deferred, &mut std::collections::HashMap::new(),
         ));
@@ -2138,7 +2150,7 @@ fn action_to_method(
     is_public: bool,
     params_specs: &ParamsSpecs,
     json_actions: &std::collections::HashSet<Symbol>,
-    turbo_stream_actions: &std::collections::HashSet<Symbol>,
+    text_format_actions: &TextFormatActions,
     view_ivars: &ViewIvarMap,
     partials: &PartialMap,
     format_breadth: FormatBreadth,
@@ -2164,11 +2176,15 @@ fn action_to_method(
     // Order matters: turbo_stream is tested before json, so an action
     // with both templates picks the one the request actually asked for.
     let mut variants: Vec<&str> = Vec::new();
-    if turbo_stream_actions.contains(&a.name) {
+    let text_formats = text_format_actions.get(&a.name).map(Vec::as_slice).unwrap_or(&[]);
+    if text_formats.contains(&"turbo_stream") {
         variants.push("turbo_stream");
     }
     if json_actions.contains(&a.name) {
         variants.push("json");
+    }
+    if text_formats.contains(&"js") {
+        variants.push("js");
     }
     // An overriding `<x>_params` yields its parent's params class —
     // see `lower_overriding_params_helper`.

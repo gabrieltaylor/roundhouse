@@ -208,4 +208,61 @@ module ActiveSupport
     end
     value
   end
+
+  def self.parse_time(str)
+    t = parse_fields(str, false)
+    raise ArgumentError, "no time information in #{str.inspect}" if t.nil?
+    t
+  end
+
+  def self.zone_parse(str)
+    parse_fields(str, true)
+  end
+
+  # Not `Date._parse`'s every shape: a string outside these forms raises rather than parse to a different instant.
+  def self.parse_fields(str, in_zone)
+    raise TypeError, "no implicit conversion of nil into String" if str.nil?
+    s = str.strip
+    m = /\A(\d{4})[-\/](\d{1,2})[-\/](\d{1,2})(?:(?:T|\s+)(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?\s*(Z|UTC|GMT|[-+]\d{2}:?\d{2})?\z/i.match(s)
+    return build_time(in_zone, m[1].to_i, m[2].to_i, m[3].to_i, m[4], m[5], m[6], m[7], m[8]) if m
+    m = /\A(\d{4})(\d{2})(\d{2})\z/.match(s)
+    return build_time(in_zone, m[1].to_i, m[2].to_i, m[3].to_i, nil, nil, nil, nil, nil) if m
+    m = /\A(\d{1,2})\/(\d{1,2})\z/.match(s)
+    return build_time(in_zone, -1, m[1].to_i, m[2].to_i, nil, nil, nil, nil, nil) if m
+    m = /\A(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?\s*(Z|UTC|GMT|[-+]\d{2}:?\d{2})?\z/i.match(s)
+    return build_time(in_zone, -1, -1, -1, m[1], m[2], m[3], m[4], m[5]) if m
+    m = /\A(?:(?:sun|mon|tue|wed|thu|fri|sat)[a-z]*,?\s+)?(?:(\d{1,2})\s+)?(jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec)[a-z]*\.?(?:\s+(\d{1,2})(?!\d),?)?(?:\s+(\d{4}))?(?:\s+(\d{1,2}):(\d{2})(?::(\d{2})(?:\.(\d+))?)?)?\s*(Z|UTC|GMT|[-+]\d{2}:?\d{2})?\z/i.match(s)
+    if m
+      mon = %w[jan feb mar apr may jun jul aug sep oct nov dec].index(m[2].downcase).to_i + 1
+      day = m[1] ? m[1].to_i : (m[3] ? m[3].to_i : -1)
+      year = m[4] ? m[4].to_i : -1
+      return build_time(in_zone, year, mon, day, m[5], m[6], m[7], m[8], m[9])
+    end
+    return nil unless s =~ /\d|jan|feb|mar|apr|may|jun|jul|aug|sep|oct|nov|dec|sun|mon|tue|wed|thu|fri|sat/i
+    raise ArgumentError, "unsupported time format: #{str.inspect}"
+  end
+
+  # -1 marks a missing date part, filled from `now` the way ActiveSupport's `parts_to_time` does.
+  def self.build_time(in_zone, year, mon, mday, hour_s, min_s, sec_s, frac, zone)
+    now = ActiveSupport.now
+    y = year < 0 ? now.year : year
+    mo = mon < 0 ? now.mon : mon
+    d = mday
+    d = (year >= 0 || mon >= 0) ? 1 : now.mday if d < 0
+    hour = hour_s ? hour_s.to_i : 0
+    min = min_s ? min_s.to_i : 0
+    sec = sec_s ? sec_s.to_i : 0
+    usec = frac ? "#{frac}000000"[0, 6].to_i : 0
+    raise ArgumentError, "argument out of range" if mo < 1 || mo > 12 || d < 1 || d > 31
+    raise ArgumentError, "argument out of range" if hour > 24 || min > 59 || sec > 60
+    return Time.local(y, mo, d, hour, min, sec, usec) if zone.nil?
+    z = zone.upcase
+    t = Time.utc(y, mo, d, hour, min, sec, usec)
+    return (in_zone ? t.getlocal : t) if z == "Z" || z == "UTC" || z == "GMT"
+    digits = z.delete(":")
+    offset = digits[1, 2].to_i * 3600 + digits[3, 2].to_i * 60
+    offset = -offset if digits[0] == "-"
+    shifted = t - offset
+    in_zone ? shifted.getlocal : shifted.getlocal(offset)
+  end
 end

@@ -126,6 +126,17 @@ An image built from an archive published before 2026-09-28 signed with
 an empty key when \`SECRET_KEY_BASE\` was unset: rebuild from a current
 archive, or pass the variable.
 
+Push notifications need a VAPID key pair, as Rails' campfire does:
+pass \`-e VAPID_PUBLIC_KEY=… -e VAPID_PRIVATE_KEY=…\` (URL-safe Base64
+P-256; \`npx web-push generate-vapid-keys\` makes a pair, as does
+campfire's own \`script/admin/generate-secrets\`). Keep the pair stable —
+browsers subscribe against the public key. Without it the page carries no
+key and browsers never offer to subscribe.
+
+Behind a proxy that terminates TLS (Fly, a load balancer, Kamal's proxy),
+the app builds its absolute URLs with the scheme the proxy reports in
+\`X-Forwarded-Proto\`, as Rails does, so its links and fetches stay https.
+
 ## Without Docker
 
 The Dockerfile is a recipe, not a requirement. On Linux with a C
@@ -141,12 +152,17 @@ telling where they are: append \`-I\$(brew --prefix)/include
 -L\$(brew --prefix)/lib\` to the \`CFLAGS\` line in \`pack/Makefile\`
 (the rest of that line is the program's defines — keep them).
 
-## What is not in this archive
+## What is not verified yet
 
-The same thing the source archive leaves out: web push delivery (the
-job logs instead of sending). Image uploads — attachments, avatars, the
-account logo — work, persist under \`/app/storage/files\`, and are
-served as the thumbnails Rails would serve (libvips, through the
+Web push delivery is implemented — the service worker and manifest are
+served, subscriptions are stored, and each message's delivery is
+encrypted and VAPID-signed byte-for-byte as the web-push gem does it —
+but a delivery from this binary to a real browser push service (Google,
+Mozilla, Apple) has not yet been confirmed. Note that campfire, as
+written, deletes a subscription on any OpenSSL error: after a failed
+delivery, subscribe again before retrying. Image uploads — attachments,
+avatars, the account logo — work, persist under \`/app/storage/files\`,
+and are served as the thumbnails Rails would serve (libvips, through the
 spinel-ruby-vips package). See the
 [project page](https://rubys.github.io/roundhouse/apps/campfire.html).
 README

@@ -7,6 +7,10 @@ actions, view templates) plus the analyzer's annotations, and produce
 
 **Source:** `src/lower/` — one file or subdirectory per concern.
 
+[`case … in` pattern matching](pattern-matching.md) is lowered during ingestion
+so the existing body typer can analyze its assignments and branches. Its builtin
+deconstruction protocols are simplified after analysis.
+
 ## Why lower?
 
 Before this layer existed, each target emitter independently

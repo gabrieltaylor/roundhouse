@@ -811,6 +811,7 @@ pub fn emit_expr(e: &Expr) -> String {
 /// through to the normal node emit.
 fn try_string_builder(e: &Expr) -> Option<String> {
     match e.hint? {
+        crate::expr::IrHint::PatternMatchOrigin | crate::expr::IrHint::PatternDeconstructOrigin | crate::expr::IrHint::PatternCheckedRead => None,
         IrHint::StringBuilderInit => {
             if let ExprNode::Assign { target: LValue::Var { name, .. }, .. } = &*e.node {
                 return Some(format!("val {} = StringBuilder()", camel(name.as_str())));

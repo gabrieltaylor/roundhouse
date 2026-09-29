@@ -21,6 +21,7 @@ pub(crate) mod associations;
 pub mod controller;
 mod engines;
 pub mod expr;
+mod pattern_match;
 pub mod fixture;
 pub mod jbuilder;
 pub mod library_class;

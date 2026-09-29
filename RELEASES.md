@@ -14,6 +14,16 @@ known gaps — so that a reader of a later snapshot can see what
 changed. The numbers are the ones CI asserts; where an entry and CI
 disagree, CI wins.
 
+## Unreleased
+
+Ruby `case … in` expressions are ingested and analyzed through shared pattern
+lowering, including nested arrays/hashes, bindings, guards, alternatives, pins
+and rests. Ruby execution is covered by oracle comparisons and the real-blog
+emit-and-run harness. JRuby shares the Ruby emission path; other targets,
+including Spinel, still diagnose this construct as unsupported. Find patterns
+and dynamic custom deconstruction remain gaps. See the
+[syntax, design and compatibility ledger](docs/pipeline/pattern-matching.md).
+
 ## 2026.9.18
 
 The first snapshot.

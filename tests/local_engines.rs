@@ -1354,6 +1354,9 @@ fn main_app_url_helpers_in_views_lower_to_absolute_urls() {
         if call.contains("only_path") {
             assert!(!output.contains("Rails.application.domain"), "{output}");
         }
+        if call == "main_app.posts_url" {
+            assert!(output.contains("Rails.application.protocol"), "{output}");
+        }
     }
 }
 

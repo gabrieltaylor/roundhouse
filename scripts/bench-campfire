@@ -875,14 +875,19 @@ login_cookie() {
                 || { fail "$lane sign-in failed"; return 1; }
             ;;
         ruby|ruby-1p|spinel|spinel-1p|jruby|truffleruby)
-            # No CSRF token scrape: the emitted tree's session form does
-            # not gate on one, and asking for a token it never issues
-            # would fail for a reason that has nothing to do with speed.
-            local code
-            code="$(curl -sS -c "$jar" -o /dev/null -w '%{http_code}' \
+            # The emitted tree verifies campfire's `protect_from_forgery
+            # with: :exception` (09567dd7), so the token comes from the
+            # lane's own form, under the session cookie that holds it.
+            local token code
+            token="$(curl -sS -c "$jar" "http://127.0.0.1:$port/session/new" \
+                     | grep -o 'name="authenticity_token" value="[^"]*"' | head -1 \
+                     | sed 's/.*value="//; s/"$//')"
+            [[ -n "$token" ]] || { fail "$lane served no CSRF token at /session/new"; return 1; }
+            code="$(curl -sS -b "$jar" -c "$jar" -o /dev/null -w '%{http_code}' \
                     -X POST "http://127.0.0.1:$port/session" \
                     --data-urlencode "email_address=user1@example.com" \
-                    --data-urlencode "password=secret123456")"
+                    --data-urlencode "password=secret123456" \
+                    --data-urlencode "authenticity_token=$token")"
             [[ "$code" == "302" ]] || { fail "$lane sign-in returned $code"; return 1; }
             ;;
     esac

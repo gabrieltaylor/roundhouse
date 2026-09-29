@@ -150,6 +150,18 @@ fn end_tag_modifier(ruby: &str) -> Option<&str> {
     is_modifier.then_some(rest)
 }
 
+/// A raw template (Rails' `Raw` handler) as `_buf` Ruby: the whole file
+/// is one text chunk, `<%` included — nothing in it is code.
+pub fn compile_raw_mapped(source: &str) -> (String, Vec<ErbSegment>) {
+    let mut out = String::from("_buf = \"\"\n");
+    let mut map: Vec<ErbSegment> = Vec::new();
+    let mut pending = PendingText::default();
+    pending.push(source, 0, source.len());
+    pending.flush(&mut out, &mut map);
+    out.push_str("_buf\n");
+    (out, map)
+}
+
 /// As [`compile_erb`], plus the segment table that maps compiled-Ruby
 /// byte ranges back to template byte ranges (see [`ErbSegment`]).
 /// View ingest uses it to translate spans so diagnostics and source

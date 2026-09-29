@@ -129,7 +129,7 @@ fn a_non_route_helper_is_untouched() {
 /// strip: `host:` IS the host of the URL it asks for.
 ///
 /// campfire's assertion compares a copy-link button — which holds
-/// `"http://#{Rails.application.domain}#{…_path}"`, the view lowerer's
+/// `"#{Rails.application.protocol}#{Rails.application.domain}#{…_path}"`, the view lowerer's
 /// grounding of a hostless `_url` — against
 /// `room_at_message_url(@room, msg, host: "once.campfire.test")`.
 /// Dropping the host would leave a bare path on one side of that
@@ -144,7 +144,10 @@ fn a_url_with_a_host_becomes_an_absolute_url() {
         "the call is rebuilt as an interpolation:\n{out}"
     );
     assert!(out.contains("once.campfire.test"), "the host survives:\n{out}");
-    assert!(out.contains("\"://\""), "as the AUTHORITY, not a query key:\n{out}");
+    assert!(
+        out.contains("Symbol(\"protocol\")"),
+        "as the AUTHORITY, behind the request's scheme, not a query key:\n{out}"
+    );
     assert!(
         out.contains("autocompletable_notes_path"),
         "over the generated _path helper:\n{out}"

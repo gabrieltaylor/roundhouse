@@ -238,16 +238,27 @@ module ActionDispatch
       fullpath
     end
 
+    # Rack's answer to "did the client connect over TLS?": the server
+    # says so (`HTTPS=on`), or a proxy that terminated TLS in front of
+    # us says so in `X-Forwarded-Proto` — Fly, a load balancer, Kamal's
+    # proxy. Rack honors the header without configuration, so Rails
+    # does too; answering http behind such a proxy made every absolute
+    # URL (`room_refresh_url`, the direct-upload URL) mixed content on
+    # an https page, and the browser blocked the fetch.
+    def ssl?
+      return true if @env.fetch("HTTPS", "").to_s == "on"
+      forwarded = @env.fetch("HTTP_X_FORWARDED_PROTO", "").to_s
+      forwarded.split(",").first.to_s.strip.downcase == "https"
+    end
+
+    # `request.protocol` — the scheme WITH its `://`, as Rails spells it.
+    def protocol
+      ssl? ? "https://" : "http://"
+    end
+
     # Scheme + host, no path — what Rails builds absolute URLs from.
-    # The scheme is a read of the one env key that carries it; a
-    # transport that terminates TLS elsewhere (every lane here) reports
-    # http, which is what the CRuby tree's overlay Request reports too.
     def base_url
-      if @env.fetch("HTTPS", "").to_s == "on"
-        "https://" + @host
-      else
-        "http://" + @host
-      end
+      protocol + @host
     end
 
     # Absolute URL of this request. Feed templates interpolate it as

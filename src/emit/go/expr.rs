@@ -626,6 +626,7 @@ fn emit_case(
 fn try_string_builder(ctx: &EmitCtx, e: &Expr) -> Option<String> {
     use crate::expr::LValue;
     match e.hint? {
+        crate::expr::IrHint::PatternMatchOrigin | crate::expr::IrHint::PatternDeconstructOrigin | crate::expr::IrHint::PatternCheckedRead => None,
         IrHint::StringBuilderInit => {
             if let ExprNode::Assign {
                 target: LValue::Var { name, .. }, ..

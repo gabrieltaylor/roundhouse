@@ -64,7 +64,19 @@ defect even if the build is green.
 5. **A new `runtime/ruby/<stem>.rb` must be registered in
    `src/project.rs::spinel_files`** or the Spinel target silently omits it.
 
-6. **Spinel is part of this codebase.** It is Matz's Ruby-to-C compiler at
+6. **A diagnostic you remove is a claim that the emitted program runs.**
+   Invariant 1 makes an error mean "not supported yet," so a change that
+   takes a construct from error to clean is a claim that it is now
+   supported, and supported means the *output* works, not that `check`
+   is quiet. Typing a call without a runtime behind it turns "reported
+   unsupported" into "silently broken," which is worse than where it
+   started. Pin such a change with `tests/emit_and_run.rs`: overlay the
+   construct onto real-blog, and the harness asserts both halves, zero
+   errors *and* the emitted Ruby test passing. A diagnostic-count test
+   alone does not prove support. If the runtime half is out of scope,
+   leave the error in place and ledger the gap.
+
+7. **Spinel is part of this codebase.** It is Matz's Ruby-to-C compiler at
    `~/git/spinel`, co-developed. Defects → upstream issues/PRs with a minimal
    repro; genuine subset gaps → design around them *honestly* (record the gap,
    don't hide it with a workaround that pretends coverage exists).
@@ -81,6 +93,10 @@ defect even if the build is green.
   Before opening one: `bin/rh fixture` (the test fixtures are generated,
   not checked in — see below), `cargo test --lib` plus the targeted
   integration test for what you touched, and a test that pins the fix.
+  When the fix removes an error diagnostic, that test goes through
+  `tests/emit_and_run.rs` (invariant 6): CI's toolchain lanes emit only
+  the fixtures, so a construct the fixtures do not use is exercised by
+  nothing else, and every lane stays green while it is broken.
   A reported repro with a patch in the issue is welcome; the same patch
   as a PR is better, because the lanes you cannot run will run.
 - **Fixtures are generated.** `fixtures/real-blog` and `fixtures/store`

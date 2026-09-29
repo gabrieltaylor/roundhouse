@@ -925,7 +925,7 @@ pub fn emit(app: &App) -> Vec<EmittedFile> {
     // the runtime_loader manifest.
     let jbuilder_funcs = crate::lower::flatten_lcs_to_functions(&jbuilder_lcs);
     let json_views: Vec<&crate::dialect::View> =
-        app.views.iter().filter(|v| v.format.as_str() == "json").collect();
+        app.views.iter().filter(|v| v.jbuilder).collect();
     for (view, func) in json_views.iter().zip(jbuilder_funcs.iter()) {
         let out_path = jbuilder_view_output_path(view.name.as_str());
         files.extend(library::emit_function_file(func, app, out_path));
@@ -934,8 +934,17 @@ pub fn emit(app: &App) -> Vec<EmittedFile> {
     if !view_funcs.is_empty() || !jbuilder_funcs.is_empty() {
         let mut all_funcs = view_funcs.clone();
         all_funcs.extend(jbuilder_funcs.iter().cloned());
-        let mut all_views: Vec<crate::dialect::View> =
-            html_views.iter().map(|v| (*v).clone()).collect();
+        // The aggregator keys import paths off the view name, so each
+        // text view carries its OUTPUT stem — `pwa/manifest_json` for a
+        // json.erb, `show_svg` for an svg one — the file written above.
+        let mut all_views: Vec<crate::dialect::View> = html_views
+            .iter()
+            .map(|v| {
+                let mut clone: crate::dialect::View = (*v).clone();
+                clone.name = crate::ident::Symbol::from(crate::lower::view::view_output_stem(v));
+                clone
+            })
+            .collect();
         for v in &json_views {
             let mut clone: crate::dialect::View = (*v).clone();
             // The aggregator keys output paths off the view name —

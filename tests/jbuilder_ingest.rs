@@ -9,12 +9,13 @@ use roundhouse::ingest::ingest_app;
 fn real_blog_jbuilder_views_ingested() {
     let app = ingest_app(roundhouse::fixtures::real_blog()).expect("ingest");
 
-    // `pwa/manifest.json.erb` is a json-format view too, ingested for
-    // the analyzer only; the jbuilder templates are the ones lowered.
+    // `pwa/manifest.json.erb` is a json-format view too, but TEXT: it
+    // lowers through the view walker, and only the jbuilder templates
+    // carry the flag.
     let json_views: Vec<_> = app
         .views
         .iter()
-        .filter(|v| v.format.as_str() == "json" && !v.analysis_only)
+        .filter(|v| v.format.as_str() == "json" && v.jbuilder)
         .map(|v| v.name.as_str().to_string())
         .collect();
 

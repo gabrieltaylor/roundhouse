@@ -21,6 +21,27 @@ use crate::ty::Ty;
 
 pub(super) fn detect_diagnostic(expr: &mut Expr) {
     if let ExprNode::Send { recv: Some(r), method, args, .. } = &*expr.node {
+        if expr.hint == Some(crate::expr::IrHint::PatternDeconstructOrigin) {
+            if matches!(&expr.diagnostic, Some(crate::diagnostic::DiagnosticKind::Unsupported { construct, .. })
+                if construct.as_str() == "pattern deconstruction") {
+                expr.diagnostic = None;
+            }
+            fn unresolved_shape(ty: &Ty) -> bool {
+                match ty {
+                    Ty::Class { .. } => true,
+                    Ty::Union { variants } => variants.iter().any(unresolved_shape),
+                    _ => ty.is_unknown(),
+                }
+            }
+            if expr.ty.as_ref().is_none_or(unresolved_shape) {
+                expr.diagnostic = Some(crate::diagnostic::DiagnosticKind::Unsupported {
+                    target: None,
+                    construct: crate::Symbol::from("pattern deconstruction"),
+                    detail: format!("cannot statically resolve {} and its return shape; dynamic custom deconstruction is unsupported", method),
+                });
+            }
+            return;
+        }
         if args.len() != 1 {
             return;
         }

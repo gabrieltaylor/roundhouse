@@ -32,7 +32,7 @@
 //!     `routes_to_library` refuses to make a parameter out of them.
 //!
 //!     **On the `_url` spelling they are not dropped — they are the
-//!     answer.** `x_url(…, host: h)` renders `"http://#{h}#{x_path(…)}"`,
+//!     answer.** `x_url(…, host: h)` renders `"#{Rails.application.protocol}#{h}#{x_path(…)}"`,
 //!     the same shape the view lowerer grounds a hostless `_url` with
 //!     (`Rails.application.domain` in place of `h`) and the same one
 //!     `emit::ruby::library::rewrite_url_helpers_absolute` builds for
@@ -270,12 +270,18 @@ fn rewrite(expr: &mut Expr, helpers: &std::collections::HashSet<String>) {
     // `rewrite_url_helpers_absolute` already set — Rails'
     // `normalize_protocol` accepts `"https"` and `"https://"` alike and
     // we accept only the first.
+    // Without one, the scheme is the request's, as Rails' `url_for`
+    // takes it — `Rails.application.protocol` carries its own `://`.
     let mut parts: Vec<InterpPart> = Vec::new();
     match protocol {
-        Some(p) => parts.push(InterpPart::Expr { expr: p }),
-        None => parts.push(InterpPart::Text { value: "http".to_string() }),
+        Some(p) => {
+            parts.push(InterpPart::Expr { expr: p });
+            parts.push(InterpPart::Text { value: "://".to_string() });
+        }
+        None => parts.push(InterpPart::Expr {
+            expr: crate::lower::view_to_library::rails_application_call("protocol"),
+        }),
     }
-    parts.push(InterpPart::Text { value: "://".to_string() });
     parts.push(InterpPart::Expr { expr: host });
     parts.push(InterpPart::Expr { expr: path_call });
     *expr.node = ExprNode::StringInterp { parts };

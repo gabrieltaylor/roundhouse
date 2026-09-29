@@ -2397,6 +2397,75 @@ end
 }
 
 #[test]
+fn time_parse_types_by_receiver_and_arity() {
+    let app = app_from_files(&[
+        (
+            "app/models/application_record.rb",
+            "class ApplicationRecord < ActiveRecord::Base\nend\n",
+        ),
+        (
+            "app/models/thing.rb",
+            r#"class Thing < ApplicationRecord
+  def stamps(raw)
+    a = Time.parse(raw)
+    b = Time.zone.parse(raw)
+    [a.strftime("%Y"), b.beginning_of_day, a < Time.now, b < Time.now]
+  end
+
+  def with_now(raw)
+    Time.zone.parse(raw, Time.now)
+  end
+end
+"#,
+        ),
+    ]);
+
+    let failures = send_dispatch_failures(&app);
+    assert_eq!(
+        failures.iter().filter(|f| f.as_str() == "parse").count(),
+        1,
+        "only the `(str, now)` form is left unresolved; failures = {failures:?}"
+    );
+    let binops: Vec<String> = diagnose(&app)
+        .into_iter()
+        .filter(|d| matches!(d.kind, DiagnosticKind::IncompatibleBinop { .. }))
+        .map(|d| d.message)
+        .collect();
+    assert_eq!(
+        binops,
+        vec!["`<` with incompatible operand types: Time? < Time".to_string()],
+        "`Time.parse` raises on no date, `Time.zone.parse` answers nil"
+    );
+}
+
+#[test]
+fn activesupport_calendar_methods_type_on_a_time() {
+    let app = app_from_files(&[
+        (
+            "app/models/application_record.rb",
+            "class ApplicationRecord < ActiveRecord::Base\nend\n",
+        ),
+        (
+            "app/models/thing.rb",
+            r#"class Thing < ApplicationRecord
+  def window(raw)
+    t = Time.zone.parse(raw)
+    [t.at_beginning_of_month.year, t.prev_month.month, t.next_day(2).day, t.weeks_ago(1).wday,
+     t.end_of_minute.min, Time.zone.yesterday.strftime("%F"), t.yesterday?, t.tomorrow? && true,
+     t.all_month.first.year, t.all_day.cover?(t)]
+  end
+end
+"#,
+        ),
+    ]);
+
+    let failures = send_dispatch_failures(&app);
+    for m in ["at_beginning_of_month", "prev_month", "next_day", "weeks_ago", "end_of_minute", "yesterday", "yesterday?", "tomorrow?", "all_month", "all_day", "first", "cover?"] {
+        assert!(!failures.iter().any(|f| f == m), "`{m}` should type on a Time; failures = {failures:?}");
+    }
+}
+
+#[test]
 fn gem_catalog_resolves_third_party_surface() {
     // The gem catalog (src/catalog/gems.rs) resolves the third-party
     // surface apps call: class methods (`Arel.sql`, `ROTP::Base32.random`),
@@ -3929,10 +3998,12 @@ end
     assert_eq!(ty("form.object.try(:name)", 12), "String?");
 }
 
-/// `.text.erb` and `.json.erb` templates are ingested for the analyzer
-/// (their Ruby types, the IDE sees them) and dropped before lowering.
+/// `.text.erb` templates are ingested for the analyzer (their Ruby
+/// types, the IDE sees them) and dropped before lowering. A `.json.erb`
+/// is not: it lowers through the view path as `<action>_json` (campfire's
+/// PWA manifest), and is no jbuilder.
 #[test]
-fn text_and_json_erb_templates_are_analysis_only() {
+fn text_erb_templates_are_analysis_only_and_json_erb_is_rendered() {
     let mut app = app_from_files(&[
         ("app/mailers/application_mailer.rb", "class ApplicationMailer < ActionMailer::Base\nend\n"),
         ("app/mailers/product_mailer.rb", "class ProductMailer < ApplicationMailer\n  def in_stock\n    @name = \"x\"\n  end\nend\n"),
@@ -3947,7 +4018,10 @@ fn text_and_json_erb_templates_are_analysis_only() {
         .filter(|v| v.analysis_only)
         .map(|v| format!("{}.{}", v.name.as_str(), v.format.as_str()))
         .collect();
-    assert_eq!(analysis_only, vec!["product_mailer/in_stock.text", "pwa/manifest.json"]);
+    assert_eq!(analysis_only, vec!["product_mailer/in_stock.text"]);
+    let manifest = app.views.iter().find(|v| v.name.as_str() == "pwa/manifest").expect("manifest ingested");
+    assert!(!manifest.jbuilder, "a json.erb is text, not jbuilder");
+    assert!(roundhouse::lower::view::lowers_through_view_path(manifest));
     let file = roundhouse::ide::file_id(&app, "app/views/product_mailer/in_stock.text.erb").expect("file");
     let text = &roundhouse::ide::source(&app, file).unwrap().text;
     let offset = text.find("@name.upcase").unwrap() as u32 + 7;

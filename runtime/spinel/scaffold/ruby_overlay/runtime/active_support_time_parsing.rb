@@ -165,4 +165,22 @@ module ActiveSupport
     end
     value
   end
+
+  def self.parse_time(str)
+    Time.parse(str, ActiveSupport.now)
+  end
+
+  # Not `Time.parse`: ActiveSupport's `TimeZone#parse` answers nil for no date and lands an offset in the app's zone.
+  def self.zone_parse(str)
+    parts = Date._parse(str, false)
+    return nil if parts.empty?
+    return Time.at(parts[:seconds] + parts.fetch(:sec_fraction, 0)).getlocal if parts[:seconds]
+    now = ActiveSupport.now
+    year = parts.fetch(:year, now.year)
+    mon = parts.fetch(:mon, now.month)
+    mday = parts.fetch(:mday, parts[:year] || parts[:mon] ? 1 : now.day)
+    sec = parts.fetch(:sec, 0) + parts.fetch(:sec_fraction, 0)
+    return Time.local(year, mon, mday, parts.fetch(:hour, 0), parts.fetch(:min, 0), sec) unless parts[:offset]
+    Time.new(year, mon, mday, parts.fetch(:hour, 0), parts.fetch(:min, 0), sec, parts[:offset]).getlocal
+  end
 end
