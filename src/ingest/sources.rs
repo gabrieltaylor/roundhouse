@@ -91,6 +91,14 @@ pub fn path_of(id: FileId) -> Option<String> {
     })
 }
 
+pub(super) fn text_of(path: &str) -> Option<String> {
+    SOURCES.with(|s| {
+        let reg = s.borrow();
+        let id = reg.by_path.get(path)?;
+        reg.files.get(id.0 as usize - 1).map(|file| file.text.clone())
+    })
+}
+
 /// Move the registered files out (ids stay valid as indices + 1) and
 /// clear the registry.
 pub fn drain() -> Vec<SourceFile> {

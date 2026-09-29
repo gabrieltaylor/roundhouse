@@ -67,3 +67,29 @@ fn a_custom_form_builder_runs() {
         .run_test("test/controllers/articles_controller_test.rb")
         .assert_passes();
 }
+
+#[test]
+fn pattern_matching_business_logic_runs() {
+    emit_and_run::real_blog()
+        .write("app/models/pattern_examples.rb", include_str!("fixtures/pattern_matching.rb"))
+        .write("app/models/pattern_result.rb", include_str!("fixtures/pattern_result.rb"))
+        .run_ruby(r#"
+raise "range/regexp matching" unless PatternExamples.fee == "fixed"
+raise "false binding" unless PatternExamples.result == false
+raise "guard/rest binding" unless PatternExamples.guarded == 9
+raise "custom deconstruction" unless PatternExamples.custom == false
+raise "subject evaluated twice" unless PatternExamples.once == [false, 1]
+begin
+  PatternExamples.unmatched
+  raise "unmatched case did not raise"
+rescue NoMatchingPatternError
+end
+begin
+  PatternExamples.exhaustive
+  raise "missing key did not raise"
+rescue NoMatchingPatternKeyError => e
+  raise "wrong missing key" unless e.key == :present
+end
+"#)
+        .assert_passes();
+}

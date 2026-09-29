@@ -311,7 +311,23 @@ impl<'a> BodyTyper<'a> {
     /// annotation rides with the IR so emitters can render a runtime
     /// raise-equivalent without re-classifying.
     pub fn analyze_expr(&self, expr: &mut Expr, ctx: &Ctx) -> Ty {
-        let ty = self.compute(expr, ctx);
+        let mut ty = self.compute(expr, ctx);
+        if expr.hint == Some(crate::expr::IrHint::PatternDeconstructOrigin) {
+            if let ExprNode::Send { recv: Some(recv), method, .. } = &*expr.node {
+                if crate::lower::pattern_match::absent_protocol(recv.ty.as_ref(), method.as_str()) {
+                    ty = Ty::Bottom;
+                }
+            }
+        }
+        if expr.hint == Some(crate::expr::IrHint::PatternCheckedRead) {
+            if let ExprNode::Send { recv: Some(recv), .. } = &*expr.node {
+                match &recv.ty {
+                    Some(Ty::Array { elem }) => ty = (**elem).clone(),
+                    Some(Ty::Hash { value, .. }) => ty = (**value).clone(),
+                    _ => {}
+                }
+            }
+        }
         expr.ty = Some(ty.clone());
         diagnostic::detect_diagnostic(expr);
         ty
@@ -659,18 +675,7 @@ impl<'a> BodyTyper<'a> {
                 // assignment narrows what it just bound (`x` is `T`
                 // on the right of `(x = find_by(…)) &&`, `T?` after
                 // `||`).
-                let mut seeded = ctx.clone();
-                collect_var_assignments_into(left, &mut seeded.local_bindings);
-                let pred = narrowing::extract_narrowing(left);
-                let right_ctx = match (&pred, &*op) {
-                    (Some(p), crate::expr::BoolOpKind::And) => {
-                        narrowing::apply_narrowing(&seeded, p, true)
-                    }
-                    (Some(p), crate::expr::BoolOpKind::Or) => {
-                        narrowing::apply_narrowing(&seeded, p, false)
-                    }
-                    _ => seeded,
-                };
+                let right_ctx = narrowing::branch_ctx(left, ctx, matches!(op, crate::expr::BoolOpKind::And));
                 let rt = self.analyze_expr(right, &right_ctx);
                 // Short-circuit: the result is either left (if it
                 // determined the short-circuit) or right — a union
@@ -963,33 +968,9 @@ impl<'a> BodyTyper<'a> {
 
             ExprNode::If { cond, then_branch, else_branch } => {
                 self.analyze_expr(cond, ctx);
-                let pred = narrowing::extract_narrowing(cond);
-                // Var assignments inside `cond` (e.g.
-                // `if (user = User.find_by(...)) && user.is_active?`)
-                // must flow into both branches: the assignment
-                // executed during cond evaluation regardless of
-                // branch taken. Then-branch may further narrow via
-                // truthiness; else-branch sees the raw assigned type.
-                // The assignment binds first and the predicate narrows
-                // what it bound: `if user = User.authenticate_by(…)`
-                // reads `user` as `User` in the then-branch, `User?`
-                // in the else-branch. (Narrowing before seeding would
-                // find no binding to narrow and leave the nil arm.)
-                let mut cond_assigns: HashMap<Symbol, Ty> = HashMap::new();
-                collect_var_assignments_into(cond, &mut cond_assigns);
-                let mut base = ctx.clone();
-                for (k, v) in &cond_assigns {
-                    base.local_bindings.insert(k.clone(), v.clone());
-                }
-                let then_ctx = match &pred {
-                    Some(p) => narrowing::apply_narrowing(&base, p, true),
-                    None => base.clone(),
-                };
+                let then_ctx = narrowing::branch_ctx(cond, ctx, true);
                 let t = self.analyze_expr(then_branch, &then_ctx);
-                let else_ctx = match &pred {
-                    Some(p) => narrowing::apply_narrowing(&base, p, false),
-                    None => base,
-                };
+                let else_ctx = narrowing::branch_ctx(cond, ctx, false);
                 let e = self.analyze_expr(else_branch, &else_ctx);
                 union_of(t, e)
             }
@@ -1335,6 +1316,16 @@ impl<'a> BodyTyper<'a> {
                         }
                     }
                     let e = &exprs[i];
+                    match &*e.node {
+                        ExprNode::BeginRescue { .. } => narrowing::export_bindings(e, &mut local_ctx),
+                        ExprNode::Assign { value, .. } if matches!(&*value.node, ExprNode::BeginRescue { .. }) => {
+                            narrowing::export_bindings(value, &mut local_ctx);
+                        }
+                        ExprNode::Send { method, .. } if method.as_str() == "delete" => {
+                            narrowing::export_bindings(e, &mut local_ctx);
+                        }
+                        _ => {}
+                    }
                     // A conditional/loop whose CONDITION assigns a local
                     // (`if !(story = find) || story.gone?`, `while (line =
                     // gets)`) binds that local for the statements that

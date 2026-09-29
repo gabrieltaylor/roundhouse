@@ -241,7 +241,7 @@ fn absurd_raise(span: Span, value: Expr) -> ExprNode {
     }
 }
 
-fn ingest_expr_strict(node: &Node<'_>, file: &str) -> IngestResult<Expr> {
+pub(super) fn ingest_expr_strict(node: &Node<'_>, file: &str) -> IngestResult<Expr> {
     // Byte offsets into the text registered for `file` (the exact text
     // prism is parsing). FileId(0) when the entry point didn't
     // register — spans then render message-only downstream.
@@ -1698,6 +1698,9 @@ fn ingest_expr_strict(node: &Node<'_>, file: &str) -> IngestResult<Expr> {
             // their own frame — entered only when a multi-write is actually
             // hit — stops them from inflating every descent frame.
             ingest_multi_write(&n.as_multi_write_node().unwrap(), span, file)?
+        }
+        n if n.as_case_match_node().is_some() => {
+            return super::pattern_match::ingest_case(&n.as_case_match_node().unwrap(), file);
         }
         n if n.as_case_node().is_some() => {
             // `case scrutinee when :a, :b then body ... [else else_body] end`

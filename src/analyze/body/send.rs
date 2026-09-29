@@ -540,10 +540,21 @@ impl<'a> BodyTyper<'a> {
         block_ret: Option<&Ty>,
         args: &[crate::expr::Expr],
     ) -> Ty {
+        if recv_ty == Some(&Ty::Bottom) { return Ty::Bottom; }
         // A tuple (a method returning `[a, b]` of mixed types — see
         // `tuple_return_ty`) is still an Array at runtime: anything but
         // destructuring reads it as one, over the union of its slots.
         if let Some(Ty::Tuple { elems }) = recv_ty {
+            if method.as_str() == "deconstruct" { return recv_ty.unwrap().clone(); }
+            if method.as_str() == "[]" && args.len() == 1 {
+                if let ExprNode::Lit { value: crate::expr::Literal::Int { value } } = &*args[0].node {
+                    let index = if *value < 0 { elems.len() as i64 + value } else { *value };
+                    if index >= 0 {
+                        if let Some(ty) = elems.get(index as usize) { return ty.clone(); }
+                    }
+                    return Ty::Nil;
+                }
+            }
             let as_array = Ty::Array {
                 elem: Box::new(elems.iter().cloned().reduce(union_of).unwrap_or(Ty::Untyped)),
             };
@@ -1929,7 +1940,7 @@ pub(super) fn array_method(method: &Symbol, elem: &Ty, block_ret: Option<&Ty>) -
                 value: Box::new(unknown()),
             },
         },
-        "to_a" => Ty::Array { elem: Box::new(elem.clone()) },
+        "to_a" | "deconstruct" => Ty::Array { elem: Box::new(elem.clone()) },
         "join" => Ty::Str,
         // `[0, 0, 0].pack("CCC")` — binary packing (lobsters'
         // confidence_order byte strings).
@@ -1958,6 +1969,8 @@ pub(super) fn record_method(
     args: &[crate::expr::Expr],
 ) -> Ty {
     match method.as_str() {
+        "deconstruct_keys" | "dup" | "clone" => Ty::Record { row: row.clone() },
+        "key?" | "has_key?" | "include?" => Ty::Bool,
         "[]" if args.len() == 1 => {
             // Literal-key bracket access → the field's exact type.
             // Non-literal keys fall through to the value-union form.
@@ -2017,7 +2030,7 @@ pub(super) fn hash_method(
         "to_a" => Ty::Array {
             elem: Box::new(Ty::Tuple { elems: vec![key.clone(), value.clone()] }),
         },
-        "dup" | "clone" => Ty::Hash {
+        "dup" | "clone" | "deconstruct_keys" => Ty::Hash {
             key: Box::new(key.clone()),
             value: Box::new(value.clone()),
         },
@@ -2048,6 +2061,7 @@ pub(super) fn hash_method(
         // from it: the rust fetch bridge already renders the two-arg
         // non-nil form as `.get(k).cloned().unwrap_or(default)` — a
         // `V`, not an `Option` (`emit/rust/expr/send/index.rs:414`).
+
         //
         // The one-arg form raises `KeyError` rather than answering
         // nil, so `value` alone would be right; it stays `value | Nil`
@@ -2378,7 +2392,7 @@ pub(super) fn universal_method(method: &Symbol) -> Option<Ty> {
         "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "respond_to?"
         | "frozen?" | "tainted?" | "untrusted?" => Some(Ty::Bool),
         // Value equality / comparison operators.
-        "==" | "!=" | "eql?" | "equal?" => Some(Ty::Bool),
+        "==" | "===" | "!=" | "eql?" | "equal?" => Some(Ty::Bool),
         // Boolean negation — Ruby's `!x` desugars to `x.!()` and is
         // also written as bare `!cond` (Send recv=None, method="!").
         // Universally returns Bool regardless of receiver.

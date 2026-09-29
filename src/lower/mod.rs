@@ -52,6 +52,7 @@ pub mod params_merge;
 pub mod duration;
 pub mod and_return;
 pub mod case_lambda;
+pub mod pattern_match;
 pub mod first_or_create;
 mod attr_or_assign;
 mod system_exception;
@@ -493,6 +494,7 @@ const POST_ANALYZE_PASS_ORDER: &[(&str, &[&str])] = &[
     ("capture_inline", &["tag_builder"]),
     ("and_return", &[]),
     ("case_lambda", &[]),
+    ("pattern_protocol", &[]),
     ("first_or_create", &[]),
     ("attr_or_assign", &[]),
     ("system_exception", &[]),
@@ -822,6 +824,8 @@ pub fn apply_post_analyze_lowerings(
     ran!("and_return");
     case_lambda::apply_case_lambda_lowering(app);
     ran!("case_lambda");
+    pattern_match::apply_protocol_lowering(app);
+    ran!("pattern_protocol");
     first_or_create::apply_first_or_create_lowering(app);
     ran!("first_or_create");
     attr_or_assign::apply_attr_or_assign_lowering(app);
