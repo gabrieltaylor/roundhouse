@@ -99,6 +99,9 @@ pub struct PreloadDirective {
     /// FK column on the target table pointing back at the parent
     /// (`article_id`). Both the `IN` filter and the group key.
     pub foreign_key: Symbol,
+    pub primary_key: Symbol,
+    pub type_condition: Option<(Symbol, String)>,
+    pub scope: Option<Box<Select>>,
 }
 
 /// `INSERT INTO <table> (<cols>) VALUES (<values>)`.

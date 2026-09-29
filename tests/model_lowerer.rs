@@ -760,6 +760,13 @@ ActiveRecord::Schema[7.1].define(version: 1) do
   create_table "stories", force: :cascade do |t|
     t.string "title"
   end
+  create_table "taggings" do |t|
+    t.integer "story_id"
+    t.integer "tag_id"
+  end
+  create_table "tags" do |t|
+    t.string "name"
+  end
 end
 "#,
         "db/schema.rb",
@@ -778,7 +785,16 @@ end
     )
     .expect("ingest")
     .expect("model");
-    let lc = lower_model_to_library_class(&model, &schema);
+    let tagging = ingest_model(
+        b"class Tagging < ApplicationRecord\n belongs_to :story\n belongs_to :tag\nend",
+        "app/models/tagging.rb", &schema, &Default::default(),
+    ).unwrap().unwrap();
+    let tag = ingest_model(
+        b"class Tag < ApplicationRecord\nend",
+        "app/models/tag.rb", &schema, &Default::default(),
+    ).unwrap().unwrap();
+    let (classes, _) = lower_models_with_registry(&[model, tagging, tag], &schema, vec![]);
+    let lc = classes.into_iter().find(|lc| lc.name.0.as_str() == "Story").unwrap();
     let names = method_names(&lc);
 
     // `story.tags = [tag]` stages cache/loaded/stale; `_sync_tags`

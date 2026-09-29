@@ -2256,13 +2256,13 @@ fn synth_initialize(owner: &ClassId, table: &Table, model: &Model, models: &[Mod
                     Span::synthetic(),
                     ExprNode::Send {
                         recv: Some(target_obj),
-                        method: Symbol::from("id"),
+                        method: assoc.primary_key(),
                         args: vec![],
                         block: None,
                         parenthesized: false,
                     },
                 ),
-                Ty::Int,
+                model.attributes.fields.get(foreign_key).cloned().unwrap_or(Ty::Int),
             );
             let fk_assign = Expr::new(
                 Span::synthetic(),
@@ -2382,9 +2382,9 @@ fn synth_initialize(owner: &ClassId, table: &Table, model: &Model, models: &[Mod
             // every construction path (mirrors cache/loaded below).
             // Only when the writer itself will exist: a nested chain
             // gets no writer (see `through_writer_join`), so no flag.
-            let writer_synthesized = through.as_ref().is_some_and(|thr_name| {
+            let writer_synthesized = through.as_ref().is_some_and(|_| {
                 matches!(
-                    super::associations::through_writer_join(model, models, thr_name, target),
+                    super::associations::through_writer_join(model, models, assoc),
                     super::associations::ThroughWriterJoin::Resolved(..)
                 )
             });

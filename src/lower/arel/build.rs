@@ -94,7 +94,7 @@ pub fn try_build_arel_with_assocs(
         // legacy no-op drop: recurse and keep the rest of the chain.
         "includes" | "preload" | "eager_load" => {
             let (op, owner) = try_chain_recv(recv, schema, registry, assocs)?;
-            let op = attach_preloads(op, &owner, args, registry, assocs);
+            let op = attach_preloads(op, &owner, args, schema, registry, assocs);
             return Some((op, owner));
         }
         // `pluck(:col)` / `ids` — a TERMINAL, not a refiner: it swaps
@@ -195,6 +195,7 @@ fn attach_preloads(
     op: ArelOp,
     owner: &ClassId,
     args: &[Expr],
+    schema: &Schema,
     registry: &HashMap<ClassId, ClassInfo>,
     assocs: &[AssociationEdge],
 ) -> ArelOp {
@@ -210,6 +211,17 @@ fn attach_preloads(
         }) else {
             continue;
         };
+        let scope = if let Some(scope) = &edge.scope {
+            let root = Expr::new(scope.span, ExprNode::Const {
+                path: edge.to.0.as_str().split("::").map(Symbol::from).collect(),
+            });
+            let query = crate::lower::association_plan::graft(scope, root);
+            let Some((ArelOp::Select(select), _)) = try_build_arel(&query, schema, registry) else {
+                continue;
+            };
+            if select.limit.is_some() || select.single_record { continue; }
+            Some(Box::new(select))
+        } else { None };
         let Some(table_ref) = registry.get(&edge.to).and_then(|i| i.table.clone()) else {
             continue;
         };
@@ -218,6 +230,9 @@ fn attach_preloads(
             target_class: edge.to.clone(),
             target_table: table_ref,
             foreign_key: edge.foreign_key.clone(),
+            primary_key: edge.primary_key.clone(),
+            type_condition: edge.type_condition.clone(),
+            scope,
         });
     }
     ArelOp::Select(sel)

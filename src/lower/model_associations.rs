@@ -67,6 +67,9 @@ pub struct AssociationEdge {
     /// HABTM it's the conventional name (`<other>_id`) and the join
     /// table lives in `join_table`.
     pub foreign_key: Symbol,
+    pub primary_key: Symbol,
+    pub type_condition: Option<(Symbol, String)>,
+    pub scope: Option<crate::expr::Expr>,
     /// `has_many :through` join association name, when applicable.
     pub through: Option<Symbol>,
     /// HABTM join-table name, when applicable.
@@ -100,74 +103,31 @@ pub fn compute_association_graph(app: &App) -> Vec<AssociationEdge> {
 }
 
 fn lift_edge(from: ClassId, assoc: &Association) -> AssociationEdge {
-    match assoc {
-        Association::HasMany {
-            name,
-            target,
-            foreign_key,
-            through,
-            ..
-        } => AssociationEdge {
-            from,
-            to: target.clone(),
-            name: name.clone(),
-            kind: if through.is_some() {
-                AssocKind::HasManyThrough
-            } else {
-                AssocKind::HasMany
-            },
-            foreign_key: foreign_key.clone(),
-            through: through.clone(),
-            join_table: None,
-            resolution: Resolution::Direct,
-        },
-        Association::BelongsTo {
-            name,
-            target,
-            foreign_key,
-            ..
-        } => AssociationEdge {
-            from,
-            to: target.clone(),
-            name: name.clone(),
-            kind: AssocKind::BelongsTo,
-            foreign_key: foreign_key.clone(),
-            through: None,
-            join_table: None,
-            resolution: Resolution::Direct,
-        },
-        Association::HasOne {
-            name,
-            target,
-            foreign_key,
-            ..
-        } => AssociationEdge {
-            from,
-            to: target.clone(),
-            name: name.clone(),
-            kind: AssocKind::HasOne,
-            foreign_key: foreign_key.clone(),
-            through: None,
-            join_table: None,
-            resolution: Resolution::Direct,
-        },
-        Association::HasAndBelongsToMany {
-            name,
-            target,
-            join_table,
-        } => AssociationEdge {
-            from,
-            to: target.clone(),
-            name: name.clone(),
-            kind: AssocKind::HasAndBelongsToMany,
-            // HABTM has no direct foreign_key on either side — it lives
-            // on the join table. Use the conventional `<other>_id` so
-            // downstream consumers have something usable.
-            foreign_key: Symbol::from(format!("{}_id", target.0.as_str().to_lowercase())),
-            through: None,
-            join_table: Some(join_table.clone()),
-            resolution: Resolution::Direct,
-        },
+    let (kind, foreign_key, through, join_table) = match assoc {
+        Association::HasMany { foreign_key, through, .. } => (
+            if through.is_some() { AssocKind::HasManyThrough } else { AssocKind::HasMany },
+            foreign_key.clone(), through.clone(), None,
+        ),
+        Association::BelongsTo { foreign_key, .. } => (AssocKind::BelongsTo, foreign_key.clone(), None, None),
+        Association::HasOne { foreign_key, .. } => (AssocKind::HasOne, foreign_key.clone(), None, None),
+        Association::HasAndBelongsToMany { target, join_table, .. } => (
+            AssocKind::HasAndBelongsToMany,
+            Symbol::from(format!("{}_id", crate::naming::snake_case(target.0.as_str().rsplit("::").next().unwrap_or("")))),
+            None, Some(join_table.clone()),
+        ),
+    };
+    let type_condition = match assoc {
+        Association::HasMany { as_interface: Some(interface), options, .. }
+        | Association::HasOne { as_interface: Some(interface), options, .. } => Some((
+            options.foreign_type.clone().unwrap_or_else(|| Symbol::from(format!("{interface}_type"))),
+            from.0.as_str().to_string(),
+        )),
+        _ => None,
+    };
+    AssociationEdge {
+        from, to: assoc.target().clone(), name: assoc.name().clone(), kind, foreign_key,
+        primary_key: assoc.primary_key(), type_condition, scope: assoc.scope().cloned(),
+        through, join_table, resolution: Resolution::Direct,
     }
 }
 
@@ -273,6 +233,7 @@ mod tests {
 
     fn has_many(name: &str, target: &str, fk: &str) -> Association {
         Association::HasMany {
+            options: Default::default(),
             name: sym(name),
             target: cid(target),
             foreign_key: sym(fk),
@@ -286,6 +247,7 @@ mod tests {
 
     fn belongs_to(name: &str, target: &str, fk: &str) -> Association {
         Association::BelongsTo {
+            options: Default::default(),
             name: sym(name),
             target: cid(target),
             foreign_key: sym(fk),

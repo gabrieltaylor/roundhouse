@@ -17,6 +17,7 @@
 
 pub mod allow_browser;
 pub mod app;
+pub(crate) mod associations;
 pub mod controller;
 mod engines;
 pub mod expr;

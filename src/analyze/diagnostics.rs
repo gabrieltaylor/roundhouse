@@ -59,6 +59,23 @@ pub fn diagnose_with_coverage(app: &App) -> (Vec<Diagnostic>, PreloadCoverage) {
         }
     }
     for model in &app.models {
+        for (span, assoc) in model.spanned_associations() {
+            if let Some(options) = assoc.options() {
+                if options.unsupported.is_empty()
+                    && app.models.iter().any(|m| &m.name == assoc.target())
+                    && !matches!(assoc, crate::dialect::Association::BelongsTo { polymorphic: true, .. })
+                {
+                    if let Err(reason) = crate::lower::association_plan::resolve(&app.models, model, assoc) {
+                        out.push(Diagnostic::unsupported(span, None, "association",
+                            format!("{}#{}: {reason}", model.name.0, assoc.name())));
+                    }
+                }
+                for reason in &options.unsupported {
+                    out.push(Diagnostic::unsupported(span, None, "association",
+                        format!("{}#{}: {reason}", model.name.0, assoc.name())));
+                }
+            }
+        }
         for scope in model.scopes() {
             diagnose_expr(&scope.body, &mut out);
         }
