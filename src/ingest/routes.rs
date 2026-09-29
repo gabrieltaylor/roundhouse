@@ -215,11 +215,7 @@ fn ingest_route_stmts<'pr>(
                             _ => None, // constraints: no scope change
                         };
                         if let Some(scope) = scope {
-                            for entry in &mut inner {
-                                if let RouteSpec::Explicit { scope: s, .. } = entry {
-                                    *s = scope;
-                                }
-                            }
+                            apply_resource_scope(&mut inner, scope);
                         }
                         entries.extend(inner);
                     }
@@ -239,6 +235,16 @@ fn ingest_route_stmts<'pr>(
         }
     }
     Ok(entries)
+}
+
+fn apply_resource_scope(entries: &mut [RouteSpec], scope: ResourceScope) {
+    for entry in entries {
+        match entry {
+            RouteSpec::Explicit { scope: current, .. } => *current = scope,
+            RouteSpec::Scope { entries, .. } => apply_resource_scope(entries, scope),
+            _ => {}
+        }
+    }
 }
 
 /// Redirect routes collected during the entry walk.
@@ -359,6 +365,47 @@ fn ingest_route_call(
     parent: Option<&str>,
     draws: &HashMap<String, (Vec<u8>, String)>,
 ) -> IngestResult<Option<RouteSpec>> {
+    if http_method_from(method).is_none() && !matches!(method, "root" | "resources" | "resource") {
+        return ingest_route_spec(call, method, file, parent, draws);
+    }
+
+    let mut defaults = IndexMap::new();
+    if let Some(args) = call.arguments() {
+        for arg in args.arguments().iter() {
+            let Some(hash) = arg.as_keyword_hash_node() else { continue };
+            for element in hash.elements().iter() {
+                let Some(assoc) = element.as_assoc_node() else { continue };
+                if symbol_value(&assoc.key()).as_deref() == Some("defaults") {
+                    defaults = ingest_route_defaults(&assoc.value(), file)?;
+                }
+            }
+        }
+    }
+
+    let route = ingest_route_spec(call, method, file, parent, draws)?;
+    Ok(route.map(|route| {
+        if defaults.is_empty() {
+            route
+        } else {
+            RouteSpec::Scope {
+                path: None,
+                module: None,
+                as_prefix: None,
+                defaults,
+                nest: false,
+                entries: vec![route],
+            }
+        }
+    }))
+}
+
+fn ingest_route_spec(
+    call: &ruby_prism::CallNode<'_>,
+    method: &str,
+    file: &str,
+    parent: Option<&str>,
+    draws: &HashMap<String, (Vec<u8>, String)>,
+) -> IngestResult<Option<RouteSpec>> {
     // Verb shortcuts (`get "/p", to: "c#a"` and the hashrocket form
     // `get "/p" => "c#a"`). `ingest_explicit_route` returns Ok(None)
     // for shapes it intentionally drops (today: `to: redirect(...)`
@@ -372,6 +419,7 @@ fn ingest_route_call(
         "resource" => ingest_resources_route(call, file, draws, true).map(Some),
         "namespace" => ingest_namespace_route(call, file, draws).map(Some),
         "scope" => ingest_scope_route(call, file, draws).map(Some),
+        "defaults" => ingest_defaults_route(call, file, parent, draws).map(Some),
         // `nested do … end` — the explicit form of the nesting a
         // `resources` block already applies to a child `resources` or
         // verb call. It carries no facets of its own; what it does is
@@ -538,18 +586,7 @@ fn ingest_scope_route(
                     // true of the triple but not of the signature.
                     // campfire calls `user_profile_url` with no argument.
                     "defaults" => {
-                        if let Some(h) = value.as_hash_node() {
-                            for el in h.elements().iter() {
-                                let Some(a) = el.as_assoc_node() else { continue };
-                                let Some(k) = symbol_value(&a.key()) else { continue };
-                                let Some(v) = string_value(&a.value())
-                                    .or_else(|| symbol_value(&a.value()))
-                                else {
-                                    continue;
-                                };
-                                defaults.insert(Symbol::from(k.as_str()), v);
-                            }
-                        }
+                        defaults = ingest_route_defaults(&value, file)?;
                     }
                     // `constraints:` / `format:` shape the request, not
                     // the (path, controller, action) triple.
@@ -560,6 +597,55 @@ fn ingest_scope_route(
     }
     let entries = block_entries(call, file, None, draws)?;
     Ok(RouteSpec::Scope { path, module, as_prefix, defaults, nest: false, entries })
+}
+
+fn ingest_route_defaults(node: &Node<'_>, file: &str) -> IngestResult<IndexMap<Symbol, String>> {
+    let elements = node
+        .as_hash_node()
+        .map(|hash| hash.elements())
+        .or_else(|| node.as_keyword_hash_node().map(|hash| hash.elements()))
+        .ok_or_else(|| IngestError::Unsupported {
+            file: file.into(),
+            message: "route defaults must be a literal hash".into(),
+        })?;
+    let mut defaults = IndexMap::new();
+    for element in elements.iter() {
+        let pair = element.as_assoc_node().and_then(|assoc| {
+            Some((symbol_value(&assoc.key())?, symbol_or_string_value(&assoc.value())?))
+        });
+        let Some((key, value)) = pair else {
+            return Err(IngestError::Unsupported {
+                file: file.into(),
+                message: "route defaults require literal symbol keys and symbol or string values; \
+                          string keys are not modeled"
+                    .into(),
+            });
+        };
+        defaults.insert(Symbol::from(key), value);
+    }
+    Ok(defaults)
+}
+
+fn ingest_defaults_route(
+    call: &ruby_prism::CallNode<'_>,
+    file: &str,
+    parent: Option<&str>,
+    draws: &HashMap<String, (Vec<u8>, String)>,
+) -> IngestResult<RouteSpec> {
+    let mut defaults = IndexMap::new();
+    if let Some(args) = call.arguments() {
+        for arg in args.arguments().iter() {
+            defaults.extend(ingest_route_defaults(&arg, file)?);
+        }
+    }
+    Ok(RouteSpec::Scope {
+        path: None,
+        module: None,
+        as_prefix: None,
+        defaults,
+        nest: false,
+        entries: block_entries(call, file, parent, draws)?,
+    })
 }
 
 /// `draw(:admin)` — Rails loads `config/routes/admin.rb` into the same

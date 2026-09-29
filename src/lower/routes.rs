@@ -289,12 +289,9 @@ fn singular_resource_actions() -> &'static [(&'static str, HttpMethod, &'static 
 fn collect_flat_routes(spec: &RouteSpec, out: &mut Vec<FlatRoute>, ctx: &Ctx) {
     match spec {
         RouteSpec::Explicit { method, path, controller, action, as_name, scope, constraints } => {
-            // `:format => "rss"` rides the constraints map at ingest
-            // (it shapes the request, not the routing triple); surface
-            // it as the route's forced response format.
-            let forced_format = constraints
-                .get(&Symbol::from("format"))
-                .map(|f| Symbol::from(f.as_str()));
+            let format = ctx.default_format().or_else(|| {
+                constraints.get(&Symbol::from("format")).map(|f| Symbol::from(f.as_str()))
+            });
             let (nested, base_params) = nest_path(path, &ctx.parents, *scope);
             let full_path = prefix_path(&ctx.ns_path, &nested);
             // Rails optional `(…)` segments (`get "/s/:id/(:title)"`) match
@@ -460,7 +457,7 @@ fn collect_flat_routes(spec: &RouteSpec, out: &mut Vec<FlatRoute>, ctx: &Ctx) {
                     action: action.clone(),
                     as_name: derived_name.clone(),
                     named: named && i == 0,
-                    format: forced_format.clone().or_else(|| ctx.default_format()),
+                    format: format.clone(),
                     required_params,
                     param_defaults: defaults_for(ctx, &params),
                     path_params: params,
@@ -501,7 +498,7 @@ fn collect_flat_routes(spec: &RouteSpec, out: &mut Vec<FlatRoute>, ctx: &Ctx) {
                 path_params: vec![],
                 param_defaults: vec![],
                 named: true,
-                format: None,
+                format: ctx.default_format(),
                 required_params: 0,
                 int_params: vec![],
                 constraints: vec![],
