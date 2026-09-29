@@ -47,6 +47,11 @@ pub enum ViewEngine {
     Haml,
     /// `.builder` — Ruby `xml.*` markup (`crate::builder`).
     Builder,
+    /// Rails' `Raw` handler: the file's bytes, verbatim. It is the
+    /// default handler, so a view with a format and NO handler extension
+    /// (campfire's `pwa/service_worker.js`) renders through it; ingest
+    /// spells such a file `<name>.<format>.raw`, as Rails would.
+    Raw,
 }
 
 impl ViewEngine {
@@ -58,6 +63,7 @@ impl ViewEngine {
             "erb" => Some(ViewEngine::Erb),
             "haml" => Some(ViewEngine::Haml),
             "builder" => Some(ViewEngine::Builder),
+            "raw" => Some(ViewEngine::Raw),
             _ => None,
         }
     }
@@ -68,6 +74,7 @@ impl ViewEngine {
             ViewEngine::Erb => erb::compile_erb_mapped,
             ViewEngine::Haml => haml::compile_haml_mapped,
             ViewEngine::Builder => crate::builder::compile_builder_mapped,
+            ViewEngine::Raw => erb::compile_raw_mapped,
         }
     }
 }
@@ -118,7 +125,8 @@ pub fn ingest_template(
 
     Ok(View {
         name: Symbol::from(name),
-        analysis_only: matches!(format.as_str(), "text" | "json"),
+        analysis_only: format.as_str() == "text",
+        jbuilder: false,
         format: Symbol::from(format),
         locals: Row::closed(),
         body,

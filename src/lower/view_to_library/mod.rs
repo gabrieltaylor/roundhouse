@@ -71,7 +71,7 @@ pub fn lower_views_to_library_classes(
     let vctx = ViewLowerCtx::new(app);
     let mut lcs: Vec<LibraryClass> = views
         .iter()
-        .filter(|v| !v.analysis_only && crate::lower::view::renders_through_view_path(v.format.as_str()))
+        .filter(|v| crate::lower::view::lowers_through_view_path(v))
         .map(|v| vctx.lower_untyped(v))
         .collect();
 
@@ -2370,9 +2370,7 @@ pub(crate) fn action_view_ivar_map(
         // assigned inside a runtime method, so there is no
         // controller-side assignment for the fallback to find either:
         // the call site passed nothing and the def took one argument.
-        if !crate::lower::view::renders_through_view_path(v.format.as_str())
-            && v.format.as_str() != "json"
-        {
+        if !crate::lower::view::lowers_through_view_path(v) && !v.jbuilder {
             continue;
         }
         // Top-level templates (`views/not_found.erb`-style trees) key
@@ -2666,7 +2664,7 @@ pub(crate) fn view_ivar_closures(
     let mut closure: HashMap<ViewKey, BTreeSet<Symbol>> = HashMap::new();
     let mut edges: HashMap<ViewKey, Vec<ViewKey>> = HashMap::new();
     for v in views {
-        if !crate::lower::view::renders_through_view_path(v.format.as_str()) {
+        if !crate::lower::view::lowers_through_view_path(v) {
             continue;
         }
         let Some(key) = view_key_of(v) else { continue };
@@ -4273,12 +4271,30 @@ pub(crate) fn view_helpers_call(method: &str, args: Vec<Expr>) -> Expr {
     send(Some(recv), method, args, None, true)
 }
 
-/// `"http://#{Rails.application.domain}#{RouteHelpers.<stem>_path(args)}"`
+/// `"#{Rails.application.protocol}#{Rails.application.domain}#{RouteHelpers.<stem>_path(args)}"`
 /// — the grounding for bare `<x>_url` absolute route helpers
 /// (RouteHelpers only generates `_path` functions; the convention
 /// matches `rewrite_url_helpers_absolute`'s host-kwarg form). Shared
-/// by the form-action resolver and the URL-position classifier.
+/// by the form-action resolver and the URL-position classifier. The
+/// scheme is the request's, as Rails' `url_for` takes it: a literal
+/// `http://` was mixed content on every https page behind a proxy.
 pub(super) fn absolute_url_interp(stem: &str, args: Vec<Expr>) -> Expr {
+    let path_call = route_helpers_call(&format!("{stem}_path"), args);
+    Expr::new(
+        Span::synthetic(),
+        ExprNode::StringInterp {
+            parts: vec![
+                InterpPart::Expr { expr: rails_application_call("protocol") },
+                InterpPart::Expr { expr: rails_application_call("domain") },
+                InterpPart::Expr { expr: path_call },
+            ],
+        },
+    )
+}
+
+/// `Rails.application.<method>` — the framework-default readers
+/// (`protocol`, `domain`) every absolute URL is grounded against.
+pub(crate) fn rails_application_call(method: &str) -> Expr {
     let rails_app = send(
         Some(Expr::new(
             Span::synthetic(),
@@ -4289,18 +4305,7 @@ pub(super) fn absolute_url_interp(stem: &str, args: Vec<Expr>) -> Expr {
         None,
         false,
     );
-    let domain = send(Some(rails_app), "domain", Vec::new(), None, false);
-    let path_call = route_helpers_call(&format!("{stem}_path"), args);
-    Expr::new(
-        Span::synthetic(),
-        ExprNode::StringInterp {
-            parts: vec![
-                InterpPart::Text { value: "http://".to_string() },
-                InterpPart::Expr { expr: domain },
-                InterpPart::Expr { expr: path_call },
-            ],
-        },
-    )
+    send(Some(rails_app), method, Vec::new(), None, false)
 }
 
 pub(super) fn route_helpers_call(method: &str, args: Vec<Expr>) -> Expr {

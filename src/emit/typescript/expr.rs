@@ -659,6 +659,7 @@ pub(super) fn collect_reassigned(body: &Expr) -> HashSet<Symbol> {
 ///   a lowerer bug).
 fn try_string_builder_stmt(e: &Expr, declared: &mut HashSet<Symbol>) -> Option<Vec<JsStmt>> {
     match e.hint? {
+        crate::expr::IrHint::PatternMatchOrigin | crate::expr::IrHint::PatternDeconstructOrigin | crate::expr::IrHint::PatternCheckedRead => None,
         IrHint::StringBuilderInit => {
             if let ExprNode::Assign { target: LValue::Var { name, .. }, .. } = &*e.node {
                 let escaped = escape_reserved_word(name.as_str());

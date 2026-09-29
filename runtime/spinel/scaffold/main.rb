@@ -178,14 +178,28 @@ module Main
     path.start_with?("/assets/") || path == "/icon.png" || path == "/icon.svg"
   end
 
+  # Rails' ActionDispatch::Static: a GET/HEAD for a file that exists
+  # under public/ (robots.txt, the error pages) is served ahead of the
+  # routes. Only a path whose last segment names a file (has an
+  # extension) is looked up, so a route like `/rooms` never stats the
+  # disk; the `..` guard is static_asset?'s.
+  def self.public_file?(verb, path)
+    return false unless verb == "GET" || verb == "HEAD"
+    return false if path.include?("..")
+    slash = path.rindex("/")
+    return false if slash.nil?
+    return false unless path[slash + 1, path.length].to_s.include?(".")
+    Sock.sphttp_filesize("public" + path) >= 0
+  end
+
   # Resolve a (pre-validated) static URL to its on-disk path under
   # static/ and hand it to the Tep server to sendfile. The server
   # doesn't infer Content-Type, so set it from the extension here; a
   # missing file 404s (Sock.sphttp_filesize returns -1 when stat fails). The
   # working directory is the app root — where `make assets` writes
   # static/ and `./build/blog` is launched from.
-  def self.serve_static(path, res)
-    disk = "static" + path
+  def self.serve_static(path, res, root = "static")
+    disk = root + path
     if Sock.sphttp_filesize(disk) < 0
       res.status = 404
       res.body = "<h1>404 Not Found</h1>"
@@ -209,6 +223,12 @@ module Main
       "image/png"
     elsif path.end_with?(".json")
       "application/json"
+    elsif path.end_with?(".html")
+      "text/html; charset=utf-8"
+    elsif path.end_with?(".txt")
+      "text/plain; charset=utf-8"
+    elsif path.end_with?(".ico")
+      "image/vnd.microsoft.icon"
     else
       "application/octet-stream"
     end
@@ -303,6 +323,10 @@ module Main
       Main.serve_static(req.path, res)
       return
     end
+    if Main.public_file?(req.verb, req.path)
+      Main.serve_static(req.path, res, "public")
+      return
+    end
 
     request_format = :html
     request_path = req.path
@@ -351,6 +375,8 @@ module Main
     request_format = :json if path_format == "json"
     request_format = :turbo_stream if path_format == "turbo_stream"
     request_format = :rss if path_format == "rss"
+    # `/service-worker.js`: campfire's raw service-worker template.
+    request_format = :js if path_format == "js"
     # A route-forced format (`get "/rss" => "home#index", :format => "rss"`)
     # overrides the path-suffix sniff above — the URL carries no extension
     # but the route pins the response format. Without it every route-pinned
@@ -396,6 +422,7 @@ module Main
     fmt_name = "json" if request_format == :json
     fmt_name = "rss" if request_format == :rss
     fmt_name = "turbo_stream" if request_format == :turbo_stream
+    fmt_name = "js" if request_format == :js
     request_obj.format = fmt_name
     request_obj.body = req.raw_body
     # Write straight into the RBS-pinned `@env` (Hash[String, untyped] ->
@@ -406,6 +433,10 @@ module Main
     # is a valid poly-member write and never constructs the competing hash.
     user_agent = req.req_headers.fetch("user-agent", "")
     request_obj.env["HTTP_USER_AGENT"] = user_agent
+    # The scheme a TLS-terminating proxy (Fly, a load balancer) saw;
+    # `Request#ssl?` reads it, and every absolute URL's `https://`
+    # depends on it.
+    request_obj.env["HTTP_X_FORWARDED_PROTO"] = req.req_headers.fetch("x-forwarded-proto", "")
     # …AND the reader, which is a DIFFERENT slot. The overlay twin's
     # `user_agent` reads `@env["HTTP_USER_AGENT"]`; the shared runtime's
     # (`runtime/ruby/action_dispatch/request.rb`) returns `@user_agent`,

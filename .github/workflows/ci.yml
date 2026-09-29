@@ -277,6 +277,12 @@ jobs:
           ruby-version: '3.4'
       - name: Install the gem the overlay escape surface uses
         run: gem install rails-html-sanitizer --no-document
+      # `tests/emit_and_run.rs` and `tests/relation_runtime_cruby.rs`
+      # run the emitted Ruby tree, whose database layer is the sqlite3
+      # gem. The second skipped without it and passed: before this step
+      # the unit job ran it as a no-op. The first refuses to skip.
+      - name: Install the gem the emitted Ruby tree runs on
+        run: gem install sqlite3 --no-document
       - name: cargo test
         run: cargo test --all-targets
       # scripts/bench emits nine of its lanes with `cargo run --bin

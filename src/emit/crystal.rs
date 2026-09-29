@@ -354,7 +354,7 @@ pub fn emit(app: &App) -> Vec<EmittedFile> {
     // `<base>_json(arg)` methods returning a JSON string. The `_json`
     // suffix prevents path collision with the html sibling.
     let json_views: Vec<&crate::dialect::View> =
-        app.views.iter().filter(|v| v.format.as_str() == "json").collect();
+        app.views.iter().filter(|v| v.jbuilder).collect();
     for (v, lc) in json_views.iter().zip(jbuilder_lcs.iter()) {
         let out_path = jbuilder_view_output_path(v.name.as_str());
         files.push(library::emit_library_class_decl(lc, app, out_path));

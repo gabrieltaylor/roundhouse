@@ -46,10 +46,13 @@ pub mod create_block;
 pub mod as_json_poro;
 pub mod active_model_model;
 pub mod enumerable_ext;
+pub mod time_calendar;
+pub mod where_range_split;
 pub mod params_merge;
 pub mod duration;
 pub mod and_return;
 pub mod case_lambda;
+pub mod pattern_match;
 pub mod first_or_create;
 mod attr_or_assign;
 mod system_exception;
@@ -319,6 +322,10 @@ const POST_ANALYZE_PASS_ORDER: &[(&str, &[&str])] = &[
     // `list.index_by { … }` → `ActiveSupport.index_by(list) { … }`.
     // Same receiver-shape rewrite, same absence of constraints.
     ("enumerable_ext", &[]),
+    // No runs_after: it reads only analyzer types and produces calls no other pass consumes.
+    ("time_calendar", &[]),
+    // After time_calendar: `t.all_month` becomes the Range literal this splits out.
+    ("where_range_split", &["time_calendar"]),
     // `Rooms::Open.count` → `Room.where(type: "Rooms::Open").count`.
     // Produces a `where` at a model Const root, which is vocabulary
     // every later pass already reads; consumes nothing any pass
@@ -487,6 +494,7 @@ const POST_ANALYZE_PASS_ORDER: &[(&str, &[&str])] = &[
     ("capture_inline", &["tag_builder"]),
     ("and_return", &[]),
     ("case_lambda", &[]),
+    ("pattern_protocol", &[]),
     ("first_or_create", &[]),
     ("attr_or_assign", &[]),
     ("system_exception", &[]),
@@ -720,6 +728,10 @@ pub fn apply_post_analyze_lowerings(
     ran!("presence_in");
     enumerable_ext::apply_enumerable_ext_grounding(app);
     ran!("enumerable_ext");
+    time_calendar::apply_time_calendar_grounding(app);
+    ran!("time_calendar");
+    diags.extend(where_range_split::apply_where_range_split(app));
+    ran!("where_range_split");
     sti_scope::apply_sti_scope_lowering(app);
     ran!("sti_scope");
     relation_ivar_materialize::apply_relation_ivar_materialize(app);
@@ -812,6 +824,8 @@ pub fn apply_post_analyze_lowerings(
     ran!("and_return");
     case_lambda::apply_case_lambda_lowering(app);
     ran!("case_lambda");
+    pattern_match::apply_protocol_lowering(app);
+    ran!("pattern_protocol");
     first_or_create::apply_first_or_create_lowering(app);
     ran!("first_or_create");
     attr_or_assign::apply_attr_or_assign_lowering(app);

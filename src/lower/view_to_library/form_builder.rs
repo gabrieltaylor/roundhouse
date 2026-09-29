@@ -1640,8 +1640,8 @@ const EDITOR_DEFAULT_CLASS: &str = "trix-content";
 /// (Trix reads both attributes at connect time) and costs nothing;
 /// what it does NOT do is make attachments work. Both Rails helpers
 /// are `_url` (absolute) forms, so the emission prefixes
-/// `http://#{Rails.application.domain}` — the same grounding every
-/// bare `_url` helper gets (`absolute_url_interp`).
+/// `#{Rails.application.protocol}#{Rails.application.domain}` — the
+/// same grounding every bare `_url` helper gets (`absolute_url_interp`).
 const DIRECT_UPLOAD_URL: &str = "/rails/active_storage/direct_uploads";
 const BLOB_URL_TEMPLATE: &str =
     "/rails/active_storage/blobs/redirect/:signed_id/:filename";
@@ -1769,13 +1769,13 @@ fn emit_rich_text_area(
     }
     // Rails fills both from `_url` (absolute) helpers, so each takes
     // the request-host grounding every bare `_url` helper gets.
-    parts.push(InterpPart::Text {
-        value: " data-direct-upload-url=\"http://".to_string(),
-    });
+    parts.push(InterpPart::Text { value: " data-direct-upload-url=\"".to_string() });
+    parts.push(InterpPart::Expr { expr: rails_protocol_expr() });
     parts.push(InterpPart::Expr { expr: rails_domain_expr() });
     parts.push(InterpPart::Text {
-        value: format!("{DIRECT_UPLOAD_URL}\" data-blob-url-template=\"http://"),
+        value: format!("{DIRECT_UPLOAD_URL}\" data-blob-url-template=\""),
     });
+    parts.push(InterpPart::Expr { expr: rails_protocol_expr() });
     parts.push(InterpPart::Expr { expr: rails_domain_expr() });
     parts.push(InterpPart::Text {
         value: format!("{BLOB_URL_TEMPLATE}\""),
@@ -1861,7 +1861,7 @@ fn emit_lexxy_editor(
     // wrote one, where they render after its entries.
     let upload_url = |path: &str| {
         string_interp(vec![
-            InterpPart::Text { value: "http://".to_string() },
+            InterpPart::Expr { expr: rails_protocol_expr() },
             InterpPart::Expr { expr: rails_domain_expr() },
             InterpPart::Text { value: path.to_string() },
         ])
@@ -1937,17 +1937,13 @@ fn is_sym(e: &Expr, name: &str) -> bool {
 /// absolute-URL grounding (`absolute_url_interp`'s), rebuilt here for
 /// attribute values whose PATH is a literal rather than a route helper.
 fn rails_domain_expr() -> Expr {
-    let rails_app = send(
-        Some(Expr::new(
-            Span::synthetic(),
-            ExprNode::Const { path: vec![Symbol::from("Rails")] },
-        )),
-        "application",
-        Vec::new(),
-        None,
-        false,
-    );
-    send(Some(rails_app), "domain", Vec::new(), None, false)
+    super::rails_application_call("domain")
+}
+
+/// `Rails.application.protocol` — the scheme half, the request's
+/// (`https://` behind a TLS-terminating proxy).
+fn rails_protocol_expr() -> Expr {
+    super::rails_application_call("protocol")
 }
 
 /// The markup the hidden input carries: `record.<field>.to_trix_html`.

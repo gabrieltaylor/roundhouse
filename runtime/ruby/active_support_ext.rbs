@@ -40,4 +40,41 @@ module ActiveSupport
   # above describes, made anyway because the narrower declaration saved
   # nine sites against the untyped ceiling — which is not a reason.
   def self.sole: (untyped list) -> untyped
+  def self.civil_days: (Integer y, Integer m, Integer d) -> Integer
+  def self.local_on: (Integer days, Integer hour, Integer min, Integer sec, Integer usec) -> Time
+  def self.days_in_month: (Integer y, Integer m) -> Integer
+  def self.days_since: (Time t, ?Integer n) -> Time
+  def self.days_ago: (Time t, ?Integer n) -> Time
+  def self.yesterday: (Time t) -> Time
+  def self.tomorrow: (Time t) -> Time
+  def self.weeks_since: (Time t, ?Integer n) -> Time
+  def self.weeks_ago: (Time t, ?Integer n) -> Time
+  def self.months_since: (Time t, ?Integer n) -> Time
+  def self.months_ago: (Time t, ?Integer n) -> Time
+  def self.years_since: (Time t, ?Integer n) -> Time
+  def self.years_ago: (Time t, ?Integer n) -> Time
+  def self.beginning_of_minute: (Time t) -> Time
+  def self.end_of_minute: (Time t) -> Time
+  def self.beginning_of_hour: (Time t) -> Time
+  def self.end_of_hour: (Time t) -> Time
+  def self.beginning_of_day: (Time t) -> Time
+  def self.end_of_day: (Time t) -> Time
+  def self.noon: (Time t) -> Time
+  def self.beginning_of_week: (Time t) -> Time
+  def self.end_of_week: (Time t) -> Time
+  def self.next_week: (Time t) -> Time
+  def self.prev_week: (Time t) -> Time
+  def self.beginning_of_month: (Time t) -> Time
+  def self.end_of_month: (Time t) -> Time
+  def self.beginning_of_year: (Time t) -> Time
+  def self.end_of_year: (Time t) -> Time
+  def self.same_day?: (Time a, Time b) -> bool
+  def self.today?: (Time t, Time now) -> bool
+  def self.yesterday?: (Time t, Time now) -> bool
+  def self.tomorrow?: (Time t, Time now) -> bool
+  def self.past?: (Time t, Time now) -> bool
+  def self.future?: (Time t, Time now) -> bool
+  def self.on_weekend?: (Time t) -> bool
+  def self.on_weekday?: (Time t) -> bool
+  def self.on_wday?: (Time t, Integer wday) -> bool
 end

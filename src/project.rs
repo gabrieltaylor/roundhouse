@@ -723,6 +723,7 @@ pub fn target_files(
     fixture: &Path,
     target: BuildTarget,
 ) -> Result<Vec<(String, String)>, String> {
+    crate::lower::pattern_match::check_target(app, target)?;
     report_unsupported_keys(app, target);
     let files = match target {
         BuildTarget::Blog => blog_files(fixture),

@@ -148,9 +148,9 @@ What differs from Rails, and why:
 - **Tokens are not masked.** Rails hands out a per-render masked token
   (a BREACH mitigation); the emit issues the session token itself.
 - **The Origin check compares hosts, not schemes.** Rails compares
-  `request.base_url`, which it gets right behind a TLS proxy through
-  `assume_ssl` / `X-Forwarded-Proto`. Neither is modeled, so a scheme
-  comparison would refuse every POST behind TLS termination.
+  `request.base_url`. The ruby family now reads `X-Forwarded-Proto`
+  (absolute URLs behind a TLS proxy are https, as in Rails), but
+  `assume_ssl` is not modeled, so the check still compares hosts only.
 - **The session and flash cookies are signed, not encrypted.** Rails'
   cookie store encrypts the session and keeps the flash inside it; the
   ruby family signs the session and gives each flash message

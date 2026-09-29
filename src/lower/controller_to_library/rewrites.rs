@@ -478,6 +478,9 @@ pub(super) fn rewrite_render_to_views(
             // `show` missed and the render became MissingTemplate — for a
             // template that is right there.
             let is_svg = render_kwargs_have_format(args, "svg");
+            // campfire's raw `pwa/service_worker.js`, reached by the
+            // implicit render's js arm — same qualified-stem rule.
+            let is_js = render_kwargs_have_format(args, "js");
             let is_json = render_kwargs_have_format(args, "json");
             // A feed branch (`format.rss { render action: "stories" }`):
             // the format-qualified template (`stories.rss.builder` →
@@ -497,6 +500,8 @@ pub(super) fn rewrite_render_to_views(
                 format!("{}_turbo_stream", view_method.as_str())
             } else if is_svg {
                 format!("{}_svg", view_method.as_str())
+            } else if is_js {
+                format!("{}_js", view_method.as_str())
             } else if is_json {
                 // Same reason the two above are qualified: the contract
                 // is keyed by the FORMAT-QUALIFIED stem. Asking for the
@@ -648,6 +653,11 @@ pub(super) fn rewrite_render_to_views(
                     (
                         Symbol::from(format!("{}_svg", view_method.as_str())),
                         Some(crate::lower::controller::body::mime_for_format("svg")),
+                    )
+                } else if is_js {
+                    (
+                        Symbol::from(format!("{}_js", view_method.as_str())),
+                        Some(crate::lower::controller::body::mime_for_format("js")),
                     )
                 } else if let Some(f) = feed_fmt {
                     // The feed's MIME either way; the method is the

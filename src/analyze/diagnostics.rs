@@ -73,6 +73,8 @@ pub fn diagnose_with_coverage(app: &App) -> (Vec<Diagnostic>, PreloadCoverage) {
         diagnose_expr(seeds, &mut out);
     }
 
+    crate::lower::for_each_hook_body_ref(app, &mut |expr| diagnose_pattern_expr(expr, &mut out));
+
     // Static N+1 pass (#64): missing-preload warnings over the typed
     // query chains, same-procedure and through the controller→view
     // ivar channel.
@@ -135,6 +137,14 @@ fn unresolved_name(expr: &Expr) -> Option<crate::ident::Symbol> {
         )),
         ExprNode::Apply { fun, .. } => unresolved_name(fun),
         _ => None,
+    }
+}
+
+fn diagnose_pattern_expr(expr: &Expr, out: &mut Vec<Diagnostic>) {
+    if expr.hint == Some(crate::expr::IrHint::PatternMatchOrigin) {
+        diagnose_expr(expr, out);
+    } else {
+        expr.node.for_each_child(&mut |child| diagnose_pattern_expr(child, out));
     }
 }
 

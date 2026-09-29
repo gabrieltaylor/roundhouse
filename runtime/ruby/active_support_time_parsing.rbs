@@ -35,4 +35,8 @@ module ActiveSupport
   def self.db_now: () -> String
 
   def self.rfc2822: (Time? t) -> String?
+
+  def self.parse_time: (String str) -> Time
+
+  def self.zone_parse: (String str) -> Time?
 end

@@ -10,6 +10,8 @@
 //! ignores `span`: round-trip tests compare re-ingested IR whose
 //! byte offsets legitimately differ.
 
+pub mod pattern_match;
+
 use serde::{Deserialize, Serialize};
 
 use crate::diagnostic::DiagnosticKind;
@@ -52,6 +54,10 @@ pub enum IrHint {
     /// On the terminal `Var` reference returning a string accumulator
     /// at the tail of a view function body.
     StringBuilderResult,
+    /// Diagnostic provenance only; these do not affect emitted semantics.
+    PatternMatchOrigin,
+    PatternDeconstructOrigin,
+    PatternCheckedRead,
 }
 
 /// The core typed λ-calculus. Ruby's ~80 AST node kinds collapse into ~15 here;
@@ -121,9 +127,13 @@ impl PartialEq for Expr {
             && self.effects == other.effects
             && self.leading_blank_line == other.leading_blank_line
             && self.diagnostic == other.diagnostic
-            && self.hint == other.hint
+            && semantic_hint(self.hint) == semantic_hint(other.hint)
             && self.decisions == other.decisions
     }
+}
+
+fn semantic_hint(hint: Option<IrHint>) -> Option<IrHint> {
+    hint.filter(|h| !matches!(h, IrHint::PatternMatchOrigin | IrHint::PatternDeconstructOrigin | IrHint::PatternCheckedRead))
 }
 
 impl Expr {

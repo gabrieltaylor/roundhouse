@@ -421,6 +421,15 @@ module Rails
       req.nil? ? "localhost" : req.host
     end
 
+    # Scheme for the same helpers, `://` included: the request's, as
+    # Rails' `url_for` takes it (`request.protocol`), so an app behind a
+    # TLS-terminating proxy renders `https://` links on its https pages.
+    # With no request in scope (a job, a mailer) Rails' default is http.
+    def protocol
+      req = ActionController::Current.request
+      req.nil? ? "http://" : req.protocol
+    end
+
     # Rails' encrypted credentials store, as an EMPTY one.
     #
     # Not a stub standing in for work not done: the store lives in

@@ -2860,6 +2860,12 @@ logs it — rather than out of the job. What a raising job does to the
 scheduled server is untested since; the threaded server drains jobs on
 a thread of its own.
 
+**Since 2026-09-22 the façade does not raise:** delivery is the gem's on
+the ruby family and a port of it on spinel (`runtime/spinel/web_push.rb`,
+`web_push_crypto.rb` — byte-identical crypto, `tests/spinel_web_push_crypto.rs`).
+The service worker and manifest it depends on are served since c89e3b22.
+A delivery to a real push service is not yet confirmed.
+
 ### The threaded binary dies on more than one OS worker — CLOSED (runtime fixed upstream; the declaration is lifted)
 
 The green-thread server (`runtime/spinel/tep/server_threaded.rb`) was

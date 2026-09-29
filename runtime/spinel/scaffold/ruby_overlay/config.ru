@@ -27,6 +27,24 @@ Broadcasts.set_transport(Cable::Registry)
 # intercepts those URLs before the Rack adapter dispatches to
 # Main.run_rack. Anything else falls through to the dynamic Router.
 use Rack::Static, urls: ["/assets", "/icon.png", "/icon.svg"], root: "static"
+# Rails' ActionDispatch::Static: a GET/HEAD for a file that exists under
+# public/ (robots.txt, the error pages) is served ahead of the routes.
+# Not `Rack::Static, urls: [""], cascade: true`: Rack::Files answers a
+# POST with 405, which does not cascade, and every form post died there.
+PUBLIC_FILES = Rack::Files.new("public")
+use(Class.new do
+  def initialize(app) = @app = app
+
+  def call(env)
+    path = env["PATH_INFO"].to_s
+    if %w[GET HEAD].include?(env["REQUEST_METHOD"]) && !path.include?("..") &&
+       File.file?(File.join("public", path))
+      PUBLIC_FILES.call(env)
+    else
+      @app.call(env)
+    end
+  end
+end)
 
 # NOTE: no Rack::MethodOverride here — Rack 3 inputs aren't
 # rewindable, so that middleware would consume `rack.input` before

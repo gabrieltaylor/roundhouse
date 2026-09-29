@@ -53,4 +53,29 @@ class ActionDispatchRequestTest < Minitest::Test
     assert_equal "localhost", r.host
     assert_equal "127.0.0.1", r.remote_ip
   end
+
+  # The scheme every absolute URL is built with. Behind a proxy that
+  # terminated TLS (Fly, a load balancer) the connection is plain http
+  # and only `X-Forwarded-Proto` says the page is https; answering http
+  # there made `room_refresh_url` mixed content and the browser blocked
+  # it. Rack honors the header unconfigured, so Rails does too.
+  def test_the_scheme_is_https_behind_a_tls_terminating_proxy
+    r = ActionDispatch::Request.for({ "HTTP_HOST" => "chat.test", "HTTP_X_FORWARDED_PROTO" => "https" })
+    assert r.ssl?
+    assert_equal "https://", r.protocol
+    assert_equal "https://chat.test", r.base_url
+  end
+
+  def test_the_scheme_is_http_without_tls_or_a_proxy_header
+    r = ActionDispatch::Request.for({ "HTTP_HOST" => "chat.test" })
+    assert !r.ssl?
+    assert_equal "http://", r.protocol
+    assert_equal "http://chat.test", r.base_url
+  end
+
+  # A proxy chain lists one scheme per hop; the first is the client's.
+  def test_the_first_forwarded_scheme_is_the_clients
+    assert ActionDispatch::Request.for({ "HTTP_X_FORWARDED_PROTO" => "https, http" }).ssl?
+    assert ActionDispatch::Request.for({ "HTTPS" => "on" }).ssl?
+  end
 end

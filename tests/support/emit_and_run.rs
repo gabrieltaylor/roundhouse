@@ -1,0 +1,255 @@
+//! Emit-and-run: the half of a claim that a diagnostic count cannot make.
+//!
+//! A change that makes an error diagnostic go away is a claim that the
+//! construct is now *supported*, and supported means the emitted program
+//! runs, not merely that `check` is quiet. `Model.human_attribute_name`
+//! (#139) is the example that motivated this file: typing it as a String
+//! took `check` to 0 errors while the emitted view raised
+//! `undefined method 'human_attribute_name' for class Article`, because
+//! no runtime defined it. Before the change it was an error, which this
+//! project reads as "not supported yet"; after, it was silently broken.
+//!
+//! This harness takes the real-blog fixture, applies a few edits (an
+//! overlay), and then does what a user of the output would: runs
+//! `check`'s error gate, emits the Ruby target, and runs one of the
+//! emitted test files with CRuby.
+//!
+//! ```ignore
+//! #[path = "support/emit_and_run.rs"]
+//! mod emit_and_run;
+//!
+//! emit_and_run::real_blog()
+//!     .edit(
+//!         "app/views/articles/_form.html.erb",
+//!         "<%= form.label :title %>",
+//!         "<%= Article.human_attribute_name(:title) %>",
+//!     )
+//!     .run_test("test/controllers/articles_controller_test.rb")
+//!     .assert_passes();
+//! ```
+//!
+//! The real-blog controller tests render every page, so an edit to a
+//! view, a controller, or a model is exercised by
+//! `articles_controller_test.rb` with no new test to write. When the
+//! construct needs a probe of its own, `run_ruby` boots the emitted app
+//! (`main.rb`, SQLite in memory) and runs a script against it.
+//!
+//! Requires `ruby` with the `sqlite3` gem, the same prerequisite as
+//! generating the fixture. It does not skip when they are absent: a
+//! harness that skips is a test that passes, and the CI unit job ran
+//! `tests/relation_runtime_cruby.rs` that way, printing "skipping" into
+//! captured output, until the job installed the gem.
+
+#![allow(dead_code)]
+
+use std::path::{Path, PathBuf};
+use std::process::Command;
+use std::sync::atomic::{AtomicUsize, Ordering};
+
+use roundhouse::analyze::{diagnose, Analyzer};
+use roundhouse::diagnostic::Severity;
+use roundhouse::ingest::ingest_app;
+use roundhouse::project::BuildTarget;
+
+/// Entries of the fixture that are neither read by ingest nor shipped
+/// by emit: Rails' runtime scratch, and the TruffleRuby lanes' bundles
+/// (440 MB between them) that the benchmark scripts leave behind.
+const SKIP: &[&str] = &["tmp", "log", "storage", "node_modules", ".git"];
+
+/// Start from `fixtures/real-blog`.
+pub fn real_blog() -> Overlay {
+    Overlay { base: roundhouse::fixtures::real_blog().to_path_buf(), edits: Vec::new() }
+}
+
+pub struct Overlay {
+    base: PathBuf,
+    edits: Vec<Edit>,
+}
+
+enum Edit {
+    Write { path: String, content: String },
+    Replace { path: String, find: String, replace: String },
+}
+
+impl Overlay {
+    /// Add a file, or replace one outright.
+    pub fn write(mut self, path: &str, content: &str) -> Self {
+        self.edits.push(Edit::Write { path: path.into(), content: content.into() });
+        self
+    }
+
+    /// Replace the one occurrence of `find` in an existing file. Panics
+    /// when `find` is absent or ambiguous, so a fixture that changes
+    /// under a test fails at the edit instead of silently testing the
+    /// unedited app.
+    pub fn edit(mut self, path: &str, find: &str, replace: &str) -> Self {
+        self.edits.push(Edit::Replace {
+            path: path.into(),
+            find: find.into(),
+            replace: replace.into(),
+        });
+        self
+    }
+
+    /// Emit, then run one of the emitted test files
+    /// (`ruby -Itest -I. <path>` in the emitted tree).
+    pub fn run_test(self, test_path: &str) -> Run {
+        let (emitted, errors) = self.emit();
+        let output = ruby()
+            .args(["-Itest", "-I."])
+            .arg(test_path)
+            .current_dir(&emitted)
+            .output()
+            .expect("spawn ruby");
+        Run::new(format!("ruby -Itest -I. {test_path}"), emitted, errors, output)
+    }
+
+    /// Emit, then run `script` against the booted app: `main.rb` is
+    /// required and the default adapter configured on an in-memory
+    /// database before the script's first line.
+    pub fn run_ruby(self, script: &str) -> Run {
+        let (emitted, errors) = self.emit();
+        let script = format!(
+            "require File.expand_path(\"main\", Dir.pwd)\nMain.configure_default_adapter!\n{script}"
+        );
+        let output = ruby()
+            .arg("-e")
+            .arg(&script)
+            .current_dir(&emitted)
+            .env("BLOG_DB", ":memory:")
+            .output()
+            .expect("spawn ruby");
+        Run::new("ruby -e <script>".into(), emitted, errors, output)
+    }
+
+    /// Copy the fixture, apply the edits, analyze, and write the Ruby
+    /// target. Returns the emitted tree and `check`'s error diagnostics.
+    fn emit(self) -> (PathBuf, Vec<String>) {
+        let scratch = scratch_dir();
+        let source = scratch.join("app");
+        copy_tree(&self.base, &source);
+        for edit in &self.edits {
+            match edit {
+                Edit::Write { path, content } => {
+                    let full = source.join(path);
+                    std::fs::create_dir_all(full.parent().unwrap()).expect("mkdir");
+                    std::fs::write(full, content).expect("write overlay file");
+                }
+                Edit::Replace { path, find, replace } => {
+                    let full = source.join(path);
+                    let text = std::fs::read_to_string(&full)
+                        .unwrap_or_else(|e| panic!("overlay edit: cannot read {path}: {e}"));
+                    let hits = text.matches(find.as_str()).count();
+                    assert_eq!(
+                        hits, 1,
+                        "overlay edit: expected exactly one {find:?} in {path}, found {hits}"
+                    );
+                    std::fs::write(full, text.replacen(find.as_str(), replace, 1))
+                        .expect("write overlay edit");
+                }
+            }
+        }
+
+        let mut app = ingest_app(&source).expect("ingest the overlaid fixture");
+        Analyzer::new(&app).analyze(&mut app);
+        let errors = diagnose(&app)
+            .into_iter()
+            .filter(|d| d.severity == Severity::Error)
+            .map(|d| format!("{:?}: {}", d.span, d.message))
+            .collect();
+
+        let emitted = scratch.join("emitted");
+        let files = roundhouse::project::target_files(&app, &source, BuildTarget::Ruby)
+            .expect("ruby target files");
+        roundhouse::project::write_to_dir(&files, &emitted).expect("write ruby target tree");
+        (emitted, errors)
+    }
+}
+
+/// What one emit-and-run produced.
+pub struct Run {
+    command: String,
+    pub emitted: PathBuf,
+    /// `check`'s error diagnostics for the overlaid app.
+    pub errors: Vec<String>,
+    pub success: bool,
+    pub stdout: String,
+    pub stderr: String,
+}
+
+impl Run {
+    fn new(command: String, emitted: PathBuf, errors: Vec<String>, output: std::process::Output) -> Self {
+        Run {
+            command,
+            emitted,
+            errors,
+            success: output.status.success(),
+            stdout: String::from_utf8_lossy(&output.stdout).into_owned(),
+            stderr: String::from_utf8_lossy(&output.stderr).into_owned(),
+        }
+    }
+
+    /// The whole claim: `check` reports no errors AND the emitted
+    /// program ran clean. Either half alone is not support.
+    pub fn assert_passes(&self) {
+        assert!(
+            self.errors.is_empty(),
+            "check reports errors, so the construct is not supported yet:\n{}",
+            self.errors.join("\n")
+        );
+        assert!(
+            self.success,
+            "check is clean but the emitted program failed: `{}` in {}\n\
+             \n=== stdout ===\n{}\n=== stderr ===\n{}",
+            self.command,
+            self.emitted.display(),
+            self.stdout,
+            self.stderr,
+        );
+    }
+}
+
+/// `ruby`, with the prerequisite checked once and named on failure.
+fn ruby() -> Command {
+    static CHECKED: std::sync::Once = std::sync::Once::new();
+    CHECKED.call_once(|| {
+        let ok = Command::new("ruby")
+            .args(["-rsqlite3", "-e", "1"])
+            .output()
+            .is_ok_and(|o| o.status.success());
+        assert!(
+            ok,
+            "emit-and-run needs `ruby` with the sqlite3 gem on PATH:\n\n    gem install sqlite3\n"
+        );
+    });
+    Command::new("ruby")
+}
+
+/// A fresh directory per run: tests in one binary run in parallel.
+fn scratch_dir() -> PathBuf {
+    static NEXT: AtomicUsize = AtomicUsize::new(0);
+    let dir = std::env::temp_dir().join(format!(
+        "roundhouse-emit-and-run-{}-{}",
+        std::process::id(),
+        NEXT.fetch_add(1, Ordering::Relaxed)
+    ));
+    let _ = std::fs::remove_dir_all(&dir);
+    dir
+}
+
+fn copy_tree(src: &Path, dst: &Path) {
+    if src.is_dir() {
+        std::fs::create_dir_all(dst).expect("mkdir");
+        for entry in std::fs::read_dir(src).expect("readdir") {
+            let entry = entry.expect("entry");
+            let name = entry.file_name();
+            let name = name.to_string_lossy();
+            if SKIP.contains(&name.as_ref()) || name.starts_with(".bundle") {
+                continue;
+            }
+            copy_tree(&entry.path(), &dst.join(entry.file_name()));
+        }
+    } else {
+        std::fs::copy(src, dst).expect("copy file");
+    }
+}

@@ -78,6 +78,43 @@ fn rewrite(expr: &mut Expr) {
         return;
     }
     let Some(receiver) = recv.as_ref() else { return };
+    // A Relation-or-Array receiver — campfire's direct-room sidebar,
+    // `members = room.users.without(user).presence || [user]`, then
+    // `members.many?`. Neither grounding fits: the Relation half has a
+    // real `many?` but the Array half has none on spinel (a poly
+    // dispatch that 500'd every sidebar on the deployed binary), and the
+    // module function takes only an Array. Both halves answer `size`,
+    // which is what `many?` without a block asks, so the call becomes
+    // `size > 1`. On the Relation half that loads the rows rather than
+    // counting them — the rows the partial iterates next anyway.
+    if method.as_str() == "many?" && is_relation_or_array_union(receiver.ty.as_ref()) {
+        let receiver = recv.take().expect("checked above");
+        let mut size = Expr::new(
+            span,
+            ExprNode::Send {
+                recv: Some(receiver),
+                method: Symbol::from("size"),
+                args: Vec::new(),
+                block: None,
+                parenthesized: false,
+            },
+        );
+        size.ty = Some(Ty::Int);
+        let mut one = Expr::new(
+            span,
+            ExprNode::Lit { value: crate::expr::Literal::Int { value: 1 } },
+        );
+        one.ty = Some(Ty::Int);
+        *expr.node = ExprNode::Send {
+            recv: Some(size),
+            method: Symbol::from(">"),
+            args: vec![one],
+            block: None,
+            parenthesized: false,
+        };
+        expr.ty = Some(Ty::Bool);
+        return;
+    }
     if is_relation(receiver.ty.as_ref()) {
         return;
     }
@@ -107,6 +144,16 @@ fn rewrite(expr: &mut Expr) {
     *parenthesized = true;
 }
 
+/// A union of an Array with a Relation or an untyped half — campfire's
+/// `members` types `Array[User?] | untyped`, the `.presence` of a
+/// `without` chain being the untyped side. Every variant answers `size`;
+/// nothing else (a Hash, nil) is let through.
+fn is_relation_or_array_union(ty: Option<&Ty>) -> bool {
+    let Some(Ty::Union { variants }) = ty else { return false };
+    variants.iter().any(|v| matches!(v, Ty::Array { .. }))
+        && variants.iter().all(|v| matches!(v, Ty::Array { .. } | Ty::Relation { .. } | Ty::Untyped))
+}
+
 /// `Ty::Relation` under any element type, and through a nullable union
 /// — the shape a scope chain leaves behind.
 fn is_relation(ty: Option<&Ty>) -> bool {
@@ -114,5 +161,72 @@ fn is_relation(ty: Option<&Ty>) -> bool {
         Some(Ty::Relation { .. }) => true,
         Some(Ty::Union { variants }) => variants.iter().any(|v| is_relation(Some(v))),
         _ => false,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::span::Span;
+
+    fn many_on(ty: Ty) -> Expr {
+        let mut members = Expr::new(
+            Span::synthetic(),
+            ExprNode::Var { id: crate::ident::VarId(0), name: Symbol::from("members") },
+        );
+        members.ty = Some(ty);
+        Expr::new(
+            Span::synthetic(),
+            ExprNode::Send {
+                recv: Some(members),
+                method: Symbol::from("many?"),
+                args: Vec::new(),
+                block: None,
+                parenthesized: false,
+            },
+        )
+    }
+
+    fn array_of_users() -> Ty {
+        Ty::Array { elem: Box::new(Ty::Class { id: crate::ident::ClassId(Symbol::from("User")), args: vec![] }) }
+    }
+
+    fn method_of(e: &Expr) -> String {
+        match &*e.node {
+            ExprNode::Send { method, .. } => method.as_str().to_string(),
+            other => format!("{other:?}"),
+        }
+    }
+
+    /// campfire's direct-room sidebar: `presence || [user]` types
+    /// `Array | untyped`, and the Array half has no `many?` on spinel.
+    #[test]
+    fn many_on_an_array_or_untyped_union_is_a_size_test() {
+        let mut e = many_on(Ty::Union { variants: vec![array_of_users(), Ty::Untyped] });
+        rewrite(&mut e);
+        assert_eq!(method_of(&e), ">");
+        let ExprNode::Send { recv: Some(size), .. } = &*e.node else { panic!() };
+        assert_eq!(method_of(size), "size");
+        assert_eq!(e.ty, Some(Ty::Bool));
+    }
+
+    /// A plain Array still takes the module function.
+    #[test]
+    fn many_on_an_array_grounds_to_the_module_function() {
+        let mut e = many_on(array_of_users());
+        rewrite(&mut e);
+        assert_eq!(method_of(&e), "many?");
+        let ExprNode::Send { recv: Some(r), .. } = &*e.node else { panic!() };
+        assert!(matches!(&*r.node, ExprNode::Const { path } if path[0].as_str() == "ActiveSupport"));
+    }
+
+    /// A union with a variant that has no `size` (nil) is left alone.
+    #[test]
+    fn many_on_a_nilable_array_union_is_untouched() {
+        let mut e = many_on(Ty::Union { variants: vec![array_of_users(), Ty::Nil] });
+        rewrite(&mut e);
+        assert_eq!(method_of(&e), "many?");
+        let ExprNode::Send { recv: Some(r), .. } = &*e.node else { panic!() };
+        assert!(matches!(&*r.node, ExprNode::Var { .. }));
     }
 }

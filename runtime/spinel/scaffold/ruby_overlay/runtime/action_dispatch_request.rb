@@ -104,9 +104,19 @@ module ActionDispatch
       @env["HTTP_HOST"] || @env["SERVER_NAME"] || "localhost"
     end
 
+    # See the shared twin: HTTPS=on, or a TLS-terminating proxy's
+    # X-Forwarded-Proto, which Rack honors unconfigured.
+    def ssl?
+      return true if @env["HTTPS"] == "on"
+      @env["HTTP_X_FORWARDED_PROTO"].to_s.split(",").first.to_s.strip.downcase == "https"
+    end
+
+    def protocol
+      ssl? ? "https://" : "http://"
+    end
+
     def base_url
-      scheme = @env["HTTPS"] == "on" ? "https" : "http"
-      "#{scheme}://#{host}"
+      "#{protocol}#{host}"
     end
 
     def remote_ip

@@ -101,6 +101,25 @@ pub fn apply_sti_scope_lowering(app: &mut App) {
     // dead weight on every target, and on the strict ones it is dead
     // weight that still has to type-check.
     let mut recast: HashSet<ClassId> = HashSet::new();
+    // Inside a subclass's OWN class method the receiver is implicit:
+    // campfire's `Rooms::Direct.find_for` writes `all.joins(:users)
+    // .detect { … }`, and Rails scopes that `all` to the subclass. Left
+    // bare, it resolved to the base's and searched EVERY room, so the
+    // open room both users belong to matched "the direct room with
+    // exactly these members" — starting a DM redirected into it and no
+    // direct room was ever created (found on the Fly deploy). Naming the
+    // subclass here hands the call to the rewrite below.
+    for lc in &mut app.library_classes {
+        if !bases.contains_key(&lc.name) {
+            continue;
+        }
+        let sub = lc.name.clone();
+        for m in &mut lc.methods {
+            if matches!(m.receiver, MethodReceiver::Class) {
+                name_implicit_receiver(&mut m.body, &sub);
+            }
+        }
+    }
     super::for_each_hook_body(app, &mut |e| rewrite(e, &bases, &mut recast));
     for view in &mut app.views {
         rewrite(&mut view.body, &bases, &mut recast);
@@ -278,6 +297,26 @@ fn push_becomes_from(app: &mut App, bases: &HashMap<ClassId, ClassId>, recast: &
             mutates_self: false,
             block_param: None,
         });
+    }
+}
+
+/// `all` / `where(…)` / … with no receiver (or `self`) in a subclass's
+/// class method → the same call on the subclass constant. Only the
+/// ROOT of a chain has no receiver, so the walk reaches it through the
+/// receivers above; block bodies are walked too (a nested query in a
+/// `detect` block is still the class's own).
+fn name_implicit_receiver(expr: &mut Expr, sub: &ClassId) {
+    expr.node.for_each_child_mut(&mut |c| name_implicit_receiver(c, sub));
+    let ExprNode::Send { recv, method, .. } = &mut *expr.node else { return };
+    if !STI_RELATION_METHODS.contains(&method.as_str()) {
+        return;
+    }
+    let implicit = match recv {
+        None => true,
+        Some(r) => matches!(&*r.node, ExprNode::SelfRef),
+    };
+    if implicit {
+        *recv = Some(class_const(sub));
     }
 }
 
