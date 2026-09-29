@@ -141,6 +141,7 @@ fn tiny_blog_round_trips() {
         gem_lock: None,
         content_helper_allowed_attributes: Vec::new(),
         helper_method_index: std::collections::HashMap::new(),
+        isolated_helper_scopes: Vec::new(),
         view_visible_controller_methods: std::collections::BTreeSet::new(),
         global_id_locate_models: std::collections::BTreeSet::new(),
         attachable_unsigned_models: Vec::new(),

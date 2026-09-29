@@ -1911,7 +1911,7 @@ pub(crate) fn apply_helper_lowering(lcs: &mut [LibraryClass], app: &App) {
     // guard that used to stand here made the qualification depend on
     // whether some unrelated file existed.
     let helper_modules: BTreeSet<ClassId> =
-        app.helper_method_index.values().cloned().collect();
+        app.helper_method_indices().flat_map(|index| index.values().cloned()).collect();
     // Generated route-helper names (`active_path`, `story_path`, …) —
     // bare calls to these in layout/helper bodies resolve to the
     // generated `RouteHelpers` module. (The view walker rewrites route
@@ -1979,9 +1979,10 @@ pub(crate) fn apply_helper_lowering(lcs: &mut [LibraryClass], app: &App) {
             // to params but not to real self-dispatched methods.
             let own_params: std::collections::HashSet<Symbol> =
                 m.params.iter().map(|p| p.name.clone()).collect();
+            let helper_index = app.helper_methods_for(lc.name.0.as_str(), m.body.span);
             rewrite_helper_calls(
                 &mut m.body,
-                &app.helper_method_index,
+                helper_index,
                 &route_helpers,
                 &url_helper_classes,
                 rewrite_request,
@@ -2049,8 +2050,8 @@ fn is_base_controller(lc: &LibraryClass) -> bool {
 /// own method is the one that should win.
 fn helper_read_ivars(app: &App) -> std::collections::BTreeSet<Symbol> {
     let helper_modules: BTreeSet<ClassId> = app
-        .helper_method_index
-        .values()
+        .helper_method_indices()
+        .flat_map(|index| index.values())
         .filter(|id| !app.controllers.iter().any(|c| &c.name == *id))
         .cloned()
         .collect();
@@ -7290,14 +7291,10 @@ pub(crate) fn apply_raw_helper_monomorphization(lcs: &mut [LibraryClass], app: &
 /// controller bodies if a corpus ever does it.
 fn raw_helper_sites(app: &App) -> BTreeSet<(Symbol, usize)> {
     let mut out = BTreeSet::new();
-    if app.helper_method_index.is_empty() {
-        return out;
-    }
-    let mut scan = |e: &Expr| {
-        collect_raw_helper_sites(e, &app.helper_method_index, &mut out);
-    };
     for v in &app.views {
-        scan(&v.body);
+        collect_raw_helper_sites(
+            &v.body, app.helper_methods_for(v.name.as_str(), v.body.span), &mut out,
+        );
     }
     out
 }

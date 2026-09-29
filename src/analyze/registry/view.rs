@@ -14,7 +14,6 @@ use crate::ty::Ty;
 
 pub(in crate::analyze) fn register(
     classes: &mut HashMap<ClassId, ClassInfo>,
-    app: &App,
     route_helper_names: &[String],
 ) {
     // ActionView form builder — `form_with do |form| form.text_field
@@ -239,19 +238,6 @@ pub(in crate::analyze) fn register(
             .entry(Symbol::from(m))
             .or_insert_with(|| super::block_fn(&Ty::Untyped, Ty::Str));
     }
-    // Helper-fold: Rails mixes EVERY module under app/helpers into
-    // every view (`helpers :all` default). Declaring them as
-    // `include`s of the view context lets `fold_concern_surfaces`
-    // copy each helper's typed surface onto `ActionView::Base` at
-    // every harvest round — so a bare `material_symbol(…)` in a
-    // template resolves exactly like a concern method on a model,
-    // refining as the fixpoint types helper bodies. Hardcoded
-    // framework entries above win over a same-named app helper
-    // (own-entry-wins in the fold); acceptable, both are Str-shaped
-    // in practice.
-    let helper_modules: BTreeSet<ClassId> =
-        app.helper_method_index.values().cloned().collect();
-    action_view.includes.extend(helper_modules);
     classes.insert(ClassId(Symbol::from("ActionView::Base")), action_view);
 
     // `ActionView::ViewHelpers` itself, called by its constant — the
@@ -322,6 +308,85 @@ pub(in crate::analyze) fn register(
             flash,
         );
     }
+}
+
+pub(in crate::analyze) fn register_helper_contexts(
+    classes: &mut HashMap<ClassId, ClassInfo>,
+    app: &App,
+) {
+    let framework = classes[&ClassId(Symbol::from("ActionView::Base"))].clone();
+    for (id, helpers) in app.view_helper_contexts() {
+        let mut context = framework.clone();
+        context
+            .includes
+            .extend(helpers.values().cloned().collect::<BTreeSet<_>>());
+        classes.insert(id, context);
+    }
+}
+
+pub(in crate::analyze) fn refresh_controller_helpers(
+    classes: &mut HashMap<ClassId, ClassInfo>,
+    app: &App,
+) {
+    if app.view_visible_controller_methods.is_empty() {
+        return;
+    }
+    let owners = app
+        .controllers
+        .iter()
+        .map(|controller| {
+            let span = controller
+                .actions()
+                .next()
+                .map(|action| action.body.span)
+                .unwrap_or_default();
+            (&controller.name, span)
+        })
+        .chain(app.library_classes.iter().map(|class| {
+            let span = class
+                .methods
+                .first()
+                .map(|method| method.body.span)
+                .unwrap_or_default();
+            (&class.name, span)
+        }));
+    let mut scoped_owners: HashMap<ClassId, Vec<&ClassId>> = HashMap::new();
+    for (owner, span) in owners {
+        scoped_owners
+            .entry(app.view_context_id(owner.0.as_str(), span))
+            .or_default()
+            .push(owner);
+    }
+    for (context, helpers) in app.view_helper_contexts() {
+        for name in &app.view_visible_controller_methods {
+            let ty = if let Some(owner) = helpers.get(name) {
+                instance_method_type(classes, owner, name)
+            } else {
+                scoped_owners.get(&context).and_then(|owners| {
+                    owners
+                        .iter()
+                        .find_map(|owner| instance_method_type(classes, owner, name))
+                })
+            };
+            if let Some(ty) = ty {
+                classes
+                    .entry(context.clone())
+                    .or_default()
+                    .instance_methods
+                    .insert(name.clone(), ty);
+            }
+        }
+    }
+}
+
+fn instance_method_type(
+    classes: &HashMap<ClassId, ClassInfo>,
+    owner: &ClassId,
+    name: &Symbol,
+) -> Option<Ty> {
+    std::iter::successors(Some(owner), |id| classes.get(id)?.parent.as_ref())
+        .take(32)
+        .find_map(|id| classes.get(id)?.instance_methods.get(name).cloned())
 }
 
 /// The format names `respond_to`'s Collector answers.

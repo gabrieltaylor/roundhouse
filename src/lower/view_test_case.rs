@@ -41,7 +41,9 @@ use std::collections::HashMap;
 const VIEW_TEST_CASE: &str = "ActionView::TestCase";
 
 pub fn apply_view_test_case_lowering(app: &mut App) -> Vec<Diagnostic> {
-    let index: HashMap<Symbol, ClassId> = app.helper_method_index.clone();
+    let indices: Vec<_> = app.test_modules.iter().map(|test| {
+        app.helper_methods_for(test.name.0.as_str(), crate::span::Span::synthetic()).clone()
+    }).collect();
     // Each app module's own methods, for the bare-call half below.
     let module_methods: HashMap<ClassId, std::collections::HashSet<Symbol>> = app
         .library_classes
@@ -50,7 +52,7 @@ pub fn apply_view_test_case_lowering(app: &mut App) -> Vec<Diagnostic> {
         .map(|lc| (lc.name.clone(), lc.methods.iter().map(|m| m.name.clone()).collect()))
         .collect();
     let mut diags = Vec::new();
-    for tm in &mut app.test_modules {
+    for (tm, index) in app.test_modules.iter_mut().zip(&indices) {
         if !tm.parent.as_ref().is_some_and(|p| p.0.as_str() == VIEW_TEST_CASE) {
             continue;
         }

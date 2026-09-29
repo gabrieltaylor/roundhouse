@@ -33,7 +33,7 @@
 //! partitions the option hash at RUNTIME, and that partition is a
 //! compile-time fact here.
 //!
-//! Scope: bare `*_path` / `*_url` calls whose name matches a route in
+//! Scope: bare or explicit `RouteHelpers` calls whose name matches a route in
 //! the app's own table. `format:` on anything else is somebody else's
 //! keyword. Applies before `lower_routes_to_library_functions`, which
 //! surveys the same call sites for query keys — `format` is on its
@@ -52,6 +52,9 @@ pub fn apply_route_format_suffix_lowering(app: &mut App) {
     for view in &mut app.views {
         rewrite(&mut view.body, &helpers);
     }
+    for helper in &mut app.routes.direct_helpers {
+        rewrite(&mut helper.body, &helpers);
+    }
     for tm in &mut app.test_modules {
         if let Some(setup) = &mut tm.setup {
             rewrite(setup, &helpers);
@@ -68,10 +71,7 @@ pub fn apply_route_format_suffix_lowering(app: &mut App) {
 /// Every `<as_name>_path` / `<as_name>_url` the app's routes define.
 pub(crate) fn route_helper_names(app: &App) -> std::collections::HashSet<String> {
     let mut out = std::collections::HashSet::new();
-    for route in super::routes::flatten_routes(app) {
-        if !route.named {
-            continue;
-        }
+    for route in super::routes::route_helpers(app) {
         out.insert(format!("{}_path", route.as_name));
         out.insert(format!("{}_url", route.as_name));
     }
@@ -80,10 +80,10 @@ pub(crate) fn route_helper_names(app: &App) -> std::collections::HashSet<String>
 
 fn rewrite(expr: &mut Expr, helpers: &std::collections::HashSet<String>) {
     expr.node.for_each_child_mut(&mut |c| rewrite(c, helpers));
-    let ExprNode::Send { recv: None, method, args, block: None, .. } = &mut *expr.node else {
+    let ExprNode::Send { recv, method, args, block: None, .. } = &mut *expr.node else {
         return;
     };
-    if !helpers.contains(method.as_str()) {
+    if !super::route_helper_receiver::is_helper_receiver(recv) || !helpers.contains(method.as_str()) {
         return;
     }
     let Some(last) = args.last_mut() else { return };

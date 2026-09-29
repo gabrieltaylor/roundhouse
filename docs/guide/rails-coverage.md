@@ -92,10 +92,40 @@ options are retained schema evidence, not new portable runtime support.
 | Active Storage | Campfire tier: blobs and attachments, the disk service, the engine's routes (redirect and representation), variants via libvips on Spinel. No cloud services. |
 | Action Text | Campfire tier: `has_rich_text`, the safe-list sanitizer, attachment rendering. |
 | Action Mailer | Ruby tier: mailer classes, `mail(...)`, `deliver_now`/`deliver_later` — delivery appends to `ActionMailer::Base.deliveries` (Rails' `:test` method, which the emitted tests assert against). No SMTP. |
-| Routing | `resources`/`resource` (nested, `only:`/`except:`, `member`/`collection`), `namespace`/`scope`, `root`, `get`/`post`/…, `constraints`, format suffixes, Active Storage's mounted engine. Not: `concern`, `direct` (a custom URL helper with an arbitrary body — dropped), `mount` of any other engine, Devise's/Doorkeeper's DSL. |
+| Routing | `resources`/`resource` (nested, `only:`/`except:`, `member`/`collection`), `namespace`/`scope`, `root`, `get`/`post`/…, `constraints`, format suffixes, `draw`, `direct`, Active Storage's mounted engine, and [source-local engines](#source-local-engines). Not: `concern`, external engine mounts, Devise's/Doorkeeper's DSL. |
 | Configuration | `config.x.*`, initializers that define constants or mix modules into models, `Rails.application.config` reads, the app's inflections. Not: `Rails.application.credentials`. |
 | Caching | Fragment caching (`cache` in views, keyed by record) and `Rails.cache.fetch`, in-process. |
 | Gems | The census names what is modeled. Modeled today: bcrypt, image_processing/ruby-vips (Spinel), rqrcode, useragent, web-push, net-http-persistent, concurrent-ruby's thread pool, importmap-rails, turbo-rails, stimulus-rails, tailwindcss-rails, jbuilder, propshaft. Everything else in a Gemfile is either infrastructure (never enters the analysis) or unknown. |
+
+## Source-local engines
+
+Mounted engines one directory below `engines/`, `components/`, or `packs/`
+join the host's ingest. Each needs a `Rails::Engine` subclass declared under
+`lib/` and its own `config/routes.rb`. Both `mount Blog::Engine, at: "/blog"`
+and `mount Blog::Engine => "/blog"` are supported, including literal `as:`
+options, split route files, and mounts of other local engines.
+
+Ruby declarations determine isolation and controller namespaces; directory
+names do not. `isolate_namespace` supplies the model table prefix, and
+`engine_name` supplies the default route proxy. Engine `app/` and `lib/`
+files use the existing Ruby and template ingesters, including HAML and
+Jbuilder. Host files take precedence at matching relative paths; conflicting
+files from two engines produce an error. Diagnostics retain original paths.
+The host's schema remains the database schema source.
+
+Isolated engines keep their view helpers separate from host and sibling-engine
+helpers. Non-isolated engines share the host's helper scope.
+
+For a singly mounted engine, bare route helpers in engine source and literal
+proxy calls such as `blog.posts_path` resolve to the generated helpers.
+Mount-point helpers such as `journal_path` are generated independently of
+engine routes. Host controller and template overrides retain the isolated
+engine's route context. Engine-local `main_app.posts_path` resolves to the
+host helper. Optional mount path segments, including those in an enclosing
+scope, are rejected with an ingest diagnostic. Dynamic proxies, route context
+for engines mounted multiple times, engine `direct`
+helpers, engine initialization hooks/configuration, and Gemfile path discovery
+outside these directories are not modeled. Engine boot code is not executed.
 
 ## What is not lowered, anywhere
 

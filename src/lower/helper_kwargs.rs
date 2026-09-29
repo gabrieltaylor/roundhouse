@@ -59,15 +59,13 @@ use crate::ident::Symbol;
 pub fn apply_helper_kwarg_positional_lowering(app: &mut App) {
     apply_to_test_modules(app);
     apply_to_library_class_calls(app);
-    let params = helper_param_names(app);
-    if params.is_empty() {
+    let params: Vec<_> = app.helper_method_indices().map(|index| helper_param_names(app, index)).collect();
+    if params.iter().all(HashMap::is_empty) {
         return;
     }
-    let mut rewrite = |e: &mut Expr| rewrite_calls(e, &params);
-    super::for_each_hook_body(app, &mut rewrite);
-    for view in &mut app.views {
-        rewrite_calls(&mut view.body, &params);
-    }
+    crate::helper_scope::for_each_body(app, &mut |scope, body| {
+        rewrite_calls(body, &params[scope.map_or(0, |index| index + 1)]);
+    });
 }
 
 /// The same repair for a library class's CLASS method called through
@@ -187,10 +185,10 @@ fn slot_of(p: &crate::dialect::Param) -> Slot {
 /// name two modules define is one this pass cannot resolve from the
 /// call site alone, and binding it to the wrong signature is exactly
 /// the failure being fixed.
-fn helper_param_names(app: &App) -> HashMap<Symbol, Vec<Slot>> {
+fn helper_param_names(app: &App, index: &HashMap<Symbol, crate::ClassId>) -> HashMap<Symbol, Vec<Slot>> {
     let mut out: HashMap<Symbol, Vec<Slot>> = HashMap::new();
     let mut ambiguous: Vec<Symbol> = Vec::new();
-    for (name, owner) in &app.helper_method_index {
+    for (name, owner) in index {
         let Some(lc) = app.library_classes.iter().find(|c| &c.name == owner) else {
             continue;
         };

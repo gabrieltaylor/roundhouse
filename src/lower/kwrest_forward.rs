@@ -100,15 +100,14 @@ use crate::expr::{Expr, ExprNode};
 use crate::ident::Symbol;
 
 pub fn apply_kwrest_forward_lowering(app: &mut App) -> Vec<Diagnostic> {
-    let sigs = helper_signatures(app);
+    let sigs: Vec<_> = app.helper_method_indices().map(|index| helper_signatures(app, index)).collect();
     let mut diags = Vec::new();
-    if sigs.is_empty() {
+    if sigs.iter().all(HashMap::is_empty) {
         return diags;
     }
-    super::for_each_hook_body(app, &mut |body| rewrite(body, &sigs, &mut diags));
-    for view in &mut app.views {
-        rewrite(&mut view.body, &sigs, &mut diags);
-    }
+    crate::helper_scope::for_each_body(app, &mut |scope, body| {
+        rewrite(body, &sigs[scope.map_or(0, |index| index + 1)], &mut diags);
+    });
     diags
 }
 
@@ -127,9 +126,9 @@ pub fn apply_kwrest_forward_lowering(app: &mut App) -> Vec<Diagnostic> {
 ///
 /// Full `Param`s rather than names: this pass needs the flattening marks
 /// and the declared defaults, not just the arity.
-fn helper_signatures(app: &App) -> HashMap<Symbol, Vec<Param>> {
+fn helper_signatures(app: &App, index: &HashMap<Symbol, crate::ClassId>) -> HashMap<Symbol, Vec<Param>> {
     let mut out: HashMap<Symbol, Vec<Param>> = HashMap::new();
-    for (name, owner) in &app.helper_method_index {
+    for (name, owner) in index {
         let Some(lc) = app.library_classes.iter().find(|c| &c.name == owner) else {
             continue;
         };

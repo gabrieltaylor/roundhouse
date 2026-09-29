@@ -2,7 +2,22 @@
 //! ApplicationController, and library-class registrations. Extracted
 //! verbatim from `Analyzer::with_adapter`.
 
+use std::collections::HashMap;
+
 use crate::App;
+use crate::analyze::ClassInfo;
+use crate::ident::{ClassId, Symbol};
+use crate::ty::Ty;
+
+pub(in crate::analyze) fn register(
+    classes: &mut HashMap<ClassId, ClassInfo>,
+    names: &[String],
+) {
+    let helpers = classes.entry(ClassId(Symbol::from("RouteHelpers"))).or_default();
+    for name in names {
+        helpers.class_methods.insert(Symbol::from(name.as_str()), Ty::Str);
+    }
+}
 
 /// Route URL helper names from the ingested route table — one
 /// `<as_name>_path` / `<as_name>_url` per named route (same flattening
@@ -40,6 +55,12 @@ pub(in crate::analyze) fn route_helper_names(app: &App) -> Vec<String> {
                 names.push(format!("{candidate}_path"));
                 names.push(format!("{candidate}_url"));
             }
+        }
+    }
+    for helper in crate::lower::routes::route_helpers(app) {
+        if seen.insert(helper.as_name.clone()) {
+            names.push(format!("{}_path", helper.as_name));
+            names.push(format!("{}_url", helper.as_name));
         }
     }
     names

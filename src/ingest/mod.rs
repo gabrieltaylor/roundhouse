@@ -18,6 +18,7 @@
 pub mod allow_browser;
 pub mod app;
 pub mod controller;
+mod engines;
 pub mod expr;
 pub mod fixture;
 pub mod jbuilder;

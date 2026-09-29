@@ -36,6 +36,7 @@ pub mod importmap_to_library;
 pub mod jbuilder_to_library;
 pub mod library_extras;
 pub mod model_to_library;
+pub(crate) mod engine_routes;
 pub mod routes;
 pub mod routes_to_library;
 pub mod scope_chain;
@@ -1010,7 +1011,15 @@ pub(crate) fn for_each_test_body(
     app: &mut crate::app::App,
     f: &mut impl FnMut(&mut crate::expr::Expr),
 ) {
+    for_each_test_body_with_owner(app, &mut |_, body| f(body));
+}
+
+pub(crate) fn for_each_test_body_with_owner(
+    app: &mut crate::app::App,
+    visit: &mut impl FnMut(Option<&crate::ClassId>, &mut crate::expr::Expr),
+) {
     for tm in &mut app.test_modules {
+        let f = &mut |body: &mut crate::expr::Expr| visit(Some(&tm.name), body);
         if let Some(setup) = &mut tm.setup {
             f(setup);
         }
@@ -1027,6 +1036,13 @@ pub(crate) fn for_each_hook_body(
     app: &mut crate::app::App,
     f: &mut impl FnMut(&mut crate::expr::Expr),
 ) {
+    for_each_hook_body_with_owner(app, &mut |_, body| f(body));
+}
+
+pub(crate) fn for_each_hook_body_with_owner(
+    app: &mut crate::app::App,
+    visit: &mut impl FnMut(Option<&crate::ClassId>, &mut crate::expr::Expr),
+) {
     fn visit_param_defaults(
         params: &mut [crate::dialect::Param],
         f: &mut impl FnMut(&mut crate::expr::Expr),
@@ -1038,6 +1054,7 @@ pub(crate) fn for_each_hook_body(
         }
     }
     for model in &mut app.models {
+        let f = &mut |body: &mut crate::expr::Expr| visit(Some(&model.name), body);
         for item in &mut model.body {
             match item {
                 crate::dialect::ModelBodyItem::Method { method, .. } => {
@@ -1077,6 +1094,7 @@ pub(crate) fn for_each_hook_body(
         }
     }
     for lc in &mut app.library_classes {
+        let f = &mut |body: &mut crate::expr::Expr| visit(Some(&lc.name), body);
         for method in &mut lc.methods {
             visit_param_defaults(&mut method.params, f);
             f(&mut method.body);
@@ -1096,6 +1114,7 @@ pub(crate) fn for_each_hook_body(
     // compiled to `undefined method 'presence' for an instance of
     // String`: a body that ships has to be walked.
     if let Some(lc) = &mut app.rails_application {
+        let f = &mut |body: &mut crate::expr::Expr| visit(Some(&lc.name), body);
         for method in &mut lc.methods {
             visit_param_defaults(&mut method.params, f);
             f(&mut method.body);
@@ -1108,6 +1127,7 @@ pub(crate) fn for_each_hook_body(
         }
     }
     for controller in &mut app.controllers {
+        let f = &mut |body: &mut crate::expr::Expr| visit(Some(&controller.name), body);
         for item in &mut controller.body {
             match item {
                 crate::dialect::ControllerBodyItem::Action { action, .. } => {
@@ -1136,7 +1156,7 @@ pub(crate) fn for_each_hook_body(
         }
     }
     if let Some(seeds) = &mut app.seeds {
-        f(seeds);
+        visit(None, seeds);
     }
 }
 

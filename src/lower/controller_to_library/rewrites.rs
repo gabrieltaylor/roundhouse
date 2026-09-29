@@ -2148,10 +2148,6 @@ fn polymorphic_path(ivar_name: &Symbol, span: Span) -> Expr {
 // `xxx_path` / `xxx_url` magic Rails injects via include doesn't
 // exist here.
 //
-// This pass runs AFTER `rewrite_redirect_to` so the polymorphic
-// rewrite's freshly-synthesized `RouteHelpers.x_path(...)` calls (which
-// have a recv) are skipped — only original bare calls get the prefix.
-//
 // `shadowed` are names the caller's own scope DEFINES as methods — a
 // controller's (or its ancestors') own `def post_authenticating_url`,
 // `def logo_path(filename)`, `def next_page_url`. The suffix alone is a
@@ -2221,10 +2217,11 @@ pub fn rewrite_route_helpers(
 ) -> Expr {
     let expr = &strip_url_helpers_receiver(expr);
     map_expr(expr, &|e| match &*e.node {
-        ExprNode::Send { recv: None, method, args, block, parenthesized }
-            if (method.as_str().ends_with("_path")
-                || method.as_str().ends_with("_url"))
-                && !shadowed.contains(method) =>
+        ExprNode::Send { recv, method, args, block, parenthesized }
+            if crate::lower::route_helper_receiver::is_helper_receiver(recv)
+                && (method.as_str().ends_with("_path")
+                    || method.as_str().ends_with("_url"))
+                && (recv.is_some() || !shadowed.contains(method)) =>
         {
             // `RouteHelpers` only emits `_path` helpers — Rails'
             // `_url` form differs by host prefix, which we don't

@@ -262,7 +262,7 @@ pub(super) fn ingest_app_schema<V: Vfs + ?Sized>(vfs: &V, dir: &Path) -> IngestR
         for path in super::app::read_rb_files(vfs, &migrations)? {
             survey::unwrap_or_record(super::schema::ingest_migration(
                 &vfs.read(&path)?,
-                &path.display().to_string(),
+                &vfs.source_path(&path).display().to_string(),
                 &mut schema,
             ))?;
         }

@@ -27,6 +27,7 @@ pub mod fixtures;
 /// [`analyze::attribution`].
 pub mod gems;
 pub mod haml;
+mod helper_scope;
 pub mod ide;
 pub mod ident;
 pub mod ingest;

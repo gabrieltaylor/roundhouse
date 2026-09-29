@@ -92,7 +92,7 @@ pub fn apply_spliced_concern_body_prune(app: &mut App) {
     // view lowering calls it as `<Helper>.name(…)`. Upstream lobsters'
     // ApplicationController `include ApplicationHelper` spliced it, and
     // the prune left the module empty under ~45 view call sites.
-    still_included.extend(app.helper_method_index.values().cloned());
+    still_included.extend(app.helper_method_indices().flat_map(|index| index.values().cloned()));
 
     for lc in &mut app.library_classes {
         if !spliced.contains(&lc.name) || still_included.contains(&lc.name) {
