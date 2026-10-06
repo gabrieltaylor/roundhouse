@@ -1370,7 +1370,6 @@ end
     // joins `dir`); map-VFS trees pass `""` and register app-relative.
     app.root = dir.display().to_string().trim_end_matches('/').to_string();
 
-    resolve_polymorphic_targets(&mut app);
     // Before the splice: it (and every later consumer) looks concerns up
     // by ClassId, so the lexical-scope resolution has to have happened.
     qualify_relative_model_includes(&mut app);
@@ -1387,6 +1386,8 @@ end
     super::channel_callbacks::lower_channel_callbacks(&mut app);
     super::channel_callbacks::lower_channel_names(&mut app);
     splice_concerns_into_models(&mut app);
+    super::associations::resolve(&mut app);
+    resolve_polymorphic_targets(&mut app);
     splice_concern_class_methods_into_models(&mut app, &concern_class_method_names);
     // After the splice, so a class method a concern contributed gets
     // the same treatment as one written in the model.
@@ -1581,12 +1582,12 @@ fn rehome_default_fk(
     let mut out = item.clone();
     let ModelBodyItem::Association { assoc, .. } = &mut out else { return out };
     let concern_default =
-        crate::ident::Symbol::from(format!("{}_id", crate::naming::snake_case(concern.0.as_str())));
+        crate::ident::Symbol::from(format!("{}_id", crate::naming::snake_case(concern.0.as_str().rsplit("::").next().unwrap_or(""))));
     let model_default =
-        crate::ident::Symbol::from(format!("{}_id", crate::naming::snake_case(model.0.as_str())));
+        crate::ident::Symbol::from(format!("{}_id", crate::naming::snake_case(model.0.as_str().rsplit("::").next().unwrap_or(""))));
     match assoc {
-        Association::HasMany { foreign_key, .. } | Association::HasOne { foreign_key, .. } => {
-            if *foreign_key == concern_default {
+        Association::HasMany { foreign_key, options, .. } | Association::HasOne { foreign_key, options, .. } => {
+            if !options.foreign_key_explicit && *foreign_key == concern_default {
                 *foreign_key = model_default;
             }
         }
