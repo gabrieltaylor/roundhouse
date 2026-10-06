@@ -35,39 +35,34 @@ pub struct NestedParent {
 pub fn find_nested_parent(app: &App, controller_class_name: &str) -> Option<NestedParent> {
     let resource = resource_from_controller_name(controller_class_name);
     let child_plural = naming::pluralize_snake(&naming::camelize(&resource));
-    find_nested_parent_in(&app.routes.entries, &child_plural)
+    find_nested_parent_in(&app.routes.entries, &child_plural, None)
 }
 
 fn find_nested_parent_in(
     entries: &[RouteSpec],
     child_plural: &str,
+    parent: Option<&str>,
 ) -> Option<NestedParent> {
     for entry in entries {
-        if let RouteSpec::Resources { name, nested, .. } = entry {
-            for child in nested {
-                if let RouteSpec::Resources { name: child_name, .. } = child {
-                    if child_name.as_str() == child_plural {
-                        // Snake-preserving singular — matches the
-                        // flattener's `:parent_id` param naming.
-                        let parent_singular = naming::singularize(name.as_str());
+        let found = match entry {
+            RouteSpec::Resources { name, nested, .. } => {
+                if name.as_str() == child_plural {
+                    if let Some(parent) = parent {
                         return Some(NestedParent {
-                            singular: parent_singular,
-                            plural: name.as_str().to_string(),
+                            singular: naming::singularize(parent),
+                            plural: parent.to_string(),
                         });
                     }
                 }
+                find_nested_parent_in(nested, child_plural, Some(name.as_str()))
             }
-            if let Some(p) = find_nested_parent_in(nested, child_plural) {
-                return Some(p);
+            RouteSpec::Scope { entries, .. } => {
+                find_nested_parent_in(entries, child_plural, parent)
             }
-        }
-        // Namespace/scope wrappers are transparent to resource
-        // nesting — the parent relation lives between the Resources
-        // entries themselves.
-        if let RouteSpec::Scope { entries, .. } = entry {
-            if let Some(p) = find_nested_parent_in(entries, child_plural) {
-                return Some(p);
-            }
+            _ => None,
+        };
+        if found.is_some() {
+            return found;
         }
     }
     None
