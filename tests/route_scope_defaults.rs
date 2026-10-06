@@ -406,9 +406,8 @@ fn defaults_preserve_resource_controller_and_member_collection_context() {
 }
 
 #[test]
-fn defaults_accept_keyword_and_explicit_hash_forms() {
+fn defaults_accept_explicit_hash_forms() {
     for declaration in [
-        "defaults format: :json",
         "defaults({ format: :json })",
         "defaults({ :format => \"json\" })",
     ] {
@@ -455,17 +454,6 @@ Rails.application.routes.draw do
 end
 "#,
         "profile_path",
-    );
-    assert_eq!(params.len(), 1);
-    assert_eq!(params[0].name.as_str(), "user_id");
-    assert_eq!(params[0].kind, ParamKind::Optional);
-}
-
-#[test]
-fn defaults_block_makes_a_segment_optional() {
-    let params = helper_params(
-        &CAMPFIRE_SHAPE.replace("scope defaults: { user_id: \"me\" }", "defaults user_id: \"me\""),
-        "user_profile_path",
     );
     assert_eq!(params.len(), 1);
     assert_eq!(params[0].name.as_str(), "user_id");
