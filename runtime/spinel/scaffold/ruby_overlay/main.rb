@@ -132,6 +132,7 @@ module Main
     request_format = :json if path_format == "json"
     request_format = :turbo_stream if path_format == "turbo_stream"
     request_format = :rss if path_format == "rss"
+    request_format = :js if path_format == "js"
     # A route-forced format (`get "/rss" => "home#index", :format =>
     # "rss"`) overrides the path-suffix sniff — the URL has no
     # extension but the route pins the response format.

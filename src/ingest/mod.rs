@@ -19,6 +19,7 @@ pub mod allow_browser;
 pub mod app;
 pub mod controller;
 pub mod expr;
+mod pattern_match;
 pub mod fixture;
 pub mod jbuilder;
 pub mod library_class;

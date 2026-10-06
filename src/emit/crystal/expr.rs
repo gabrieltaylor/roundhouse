@@ -248,6 +248,7 @@ fn rewrite_stdlib_const(name: &str) -> Option<&'static str> {
 /// signal that the lowerer guarantees Builder semantics are safe.
 fn try_string_builder(e: &Expr) -> Option<String> {
     match e.hint? {
+        crate::expr::IrHint::PatternMatchOrigin | crate::expr::IrHint::PatternDeconstructOrigin | crate::expr::IrHint::PatternCheckedRead => None,
         IrHint::StringBuilderInit => {
             if let ExprNode::Assign {
                 target: LValue::Var { name, .. }, ..

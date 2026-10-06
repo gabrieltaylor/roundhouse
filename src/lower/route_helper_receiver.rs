@@ -19,7 +19,7 @@
 //! five sites in one emit, three ways at once:
 //!
 //! * It folds `_url` onto its `_path` twin. A later pass turns
-//!   `new_session_url` into `"http://#{Rails.application.domain}#{…}"`;
+//!   `new_session_url` into `"#{Rails.application.protocol}#{Rails.application.domain}#{…}"`;
 //!   folding first left campfire's post-authentication redirect pointing
 //!   at a bare path with no host.
 //! * The suffix caught `image_path`, `asset_path` and `polymorphic_url`,

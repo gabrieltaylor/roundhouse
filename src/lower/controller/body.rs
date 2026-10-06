@@ -631,6 +631,9 @@ pub(crate) fn mime_for_format(fmt: &str) -> &'static str {
         // response is an image and browsers treat it as one only with
         // this type.
         "svg" => "image/svg+xml",
+        // A service worker (campfire's raw `pwa/service_worker.js`):
+        // browsers refuse to register a script served as anything else.
+        "js" => "text/javascript; charset=utf-8",
         // Feeds (Mime::Type's registrations): lobsters' /rss.
         "rss" => "application/rss+xml; charset=utf-8",
         "atom" => "application/atom+xml; charset=utf-8",

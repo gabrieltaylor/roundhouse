@@ -79,10 +79,11 @@ $csrf = nil
 EMAIL    = ENV["CAMPFIRE_EMAIL"] || "walker@example.com"
 PASSWORD = ENV["CAMPFIRE_PASSWORD"] || "secret123"
 
-def req(verb, path, form = nil, accept: "text/html", csrf: true, origin: nil, token: nil)
+def req(verb, path, form = nil, accept: "text/html", csrf: true, origin: nil, token: nil, headers: {})
   uri = URI("#{BASE}#{path}")
   r = verb == "GET" ? Net::HTTP::Get.new(uri) : Net::HTTP::Post.new(uri)
   r["Accept"] = accept
+  headers.each { |k, v| r[k] = v }
   r["Cookie"] = $jar.map { |k, v| "#{k}=#{v}" }.join("; ") unless $jar.empty?
   # Every lane enforces CSRF on a POST. The token is whatever the most
   # recent page's `csrf-token` meta carried — which is how campfire's
@@ -166,7 +167,15 @@ end
 
 # ── sign in ───────────────────────────────────────────────────────────
 puts "\n\e[1;34m==>\e[0m sign in"
-if req("GET", "/first_run").code == "200"
+def check_translation_button(body)
+  summary = body.to_s[%r{<summary class="btn"[^>]*>(.*?)</summary>}m, 1].to_s
+  check("the translate button's summary is the globe icon", summary.include?("globe"), true)
+  check("the translate button's summary holds no language list", summary.include?("language-list"), false)
+end
+
+first_run = req("GET", "/first_run")
+if first_run.code == "200"
+  check_translation_button(first_run.body)
   req("POST", "/first_run", {
     "user[name]" => "Walker",
     "user[email_address]" => EMAIL,
@@ -175,7 +184,7 @@ if req("GET", "/first_run").code == "200"
 else
   # A seeded tree: through the real form, scraping its CSRF token on
   # the way past — real Rails 422s a naked /session POST.
-  req("GET", "/session/new")
+  check_translation_button(req("GET", "/session/new").body)
   req("POST", "/session", {
     "email_address" => EMAIL, "password" => PASSWORD,
   })
@@ -196,6 +205,30 @@ channel = tag[/channel="([^"]+)"/, 1]
 signed  = tag[/signed-stream-name="([^"]+)"/, 1]
 # The app routed the subscription AWAY from the stock channel on purpose.
 check("the page names the app's own channel", channel, "RoomMessagesChannel")
+
+puts "\n\e[1;34m==>\e[0m behind a TLS-terminating proxy"
+proxied = req("GET", "/rooms/1", headers: { "X-Forwarded-Proto" => "https" })
+refresh = proxied.body.to_s[/data-refresh-room-url-value="([^"]+)"/, 1].to_s
+check("the room's refresh URL takes the proxy's scheme", refresh[%r{\A[a-z]+://}], "https://")
+
+puts "\n\e[1;34m==>\e[0m the PWA endpoints"
+sw = req("GET", "/service-worker.js", accept: "*/*")
+check("GET /service-worker.js", sw.code, "200")
+check("the service worker is served as JavaScript", sw["content-type"].to_s[/\A[^;]+/], "text/javascript")
+check("the service worker handles push", sw.body.to_s.include?('addEventListener("push"'), true)
+manifest = req("GET", "/webmanifest.json", accept: "application/json")
+check("GET /webmanifest.json", manifest.code, "200")
+check("the manifest is served as JSON", manifest["content-type"].to_s[/\A[^;]+/], "application/json")
+manifest_name = (JSON.parse(manifest.body.to_s)["name"] rescue nil)
+check("the manifest parses and names the app", manifest_name.is_a?(String) && !manifest_name.empty?, true)
+
+puts "\n\e[1;34m==>\e[0m a direct room in the sidebar"
+direct = req("POST", "/rooms/directs", { "user_ids[]" => "2" })
+check("POST /rooms/directs", direct.code, "302")
+check("starting a DM does not land in the open room",
+      direct["location"].to_s.end_with?("/rooms/1"), false)
+sidebar = req("GET", "/users/me/sidebar")
+check("GET /users/me/sidebar with a direct room", sidebar.code, "200")
 
 # ── two connections ───────────────────────────────────────────────────
 puts "\n\e[1;34m==>\e[0m two /cable connections"

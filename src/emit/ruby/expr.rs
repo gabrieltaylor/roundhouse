@@ -257,7 +257,7 @@ fn emit_node(n: &ExprNode) -> String {
             let op = if *exclusive { "..." } else { ".." };
             let b = begin.as_ref().map(emit_expr).unwrap_or_default();
             let e = end.as_ref().map(emit_expr).unwrap_or_default();
-            format!("{b}{op}{e}")
+            if end.is_none() { format!("({b}{op})") } else { format!("{b}{op}{e}") }
         }
         ExprNode::BeginRescue { body, rescues, else_branch, ensure, implicit } => {
             let mut s = String::new();
@@ -1040,6 +1040,7 @@ fn binop_of(e: &Expr) -> Option<&str> {
         // re-parses as `hrc = (HatRequest.count > 0)`, the local becoming
         // the comparison.
         ExprNode::Assign { .. } | ExprNode::OpAssign { .. } | ExprNode::MultiAssign { .. } => Some("="),
+        ExprNode::Range { .. } => Some(".."),
         _ => None,
     }
 }

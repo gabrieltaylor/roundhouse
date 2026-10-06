@@ -540,10 +540,21 @@ impl<'a> BodyTyper<'a> {
         block_ret: Option<&Ty>,
         args: &[crate::expr::Expr],
     ) -> Ty {
+        if recv_ty == Some(&Ty::Bottom) { return Ty::Bottom; }
         // A tuple (a method returning `[a, b]` of mixed types — see
         // `tuple_return_ty`) is still an Array at runtime: anything but
         // destructuring reads it as one, over the union of its slots.
         if let Some(Ty::Tuple { elems }) = recv_ty {
+            if method.as_str() == "deconstruct" { return recv_ty.unwrap().clone(); }
+            if method.as_str() == "[]" && args.len() == 1 {
+                if let ExprNode::Lit { value: crate::expr::Literal::Int { value } } = &*args[0].node {
+                    let index = if *value < 0 { elems.len() as i64 + value } else { *value };
+                    if index >= 0 {
+                        if let Some(ty) = elems.get(index as usize) { return ty.clone(); }
+                    }
+                    return Ty::Nil;
+                }
+            }
             let as_array = Ty::Array {
                 elem: Box::new(elems.iter().cloned().reduce(union_of).unwrap_or(Ty::Untyped)),
             };
@@ -1572,6 +1583,15 @@ pub(super) fn time_method(method: &Symbol) -> Option<Ty> {
         | "beginning_of_day" | "end_of_day" | "beginning_of_hour" | "end_of_hour"
         | "beginning_of_week" | "end_of_week" | "beginning_of_month" | "end_of_month"
         | "beginning_of_year" | "end_of_year" | "midnight" | "noon"
+        | "beginning_of_minute" | "end_of_minute" | "middle_of_day" | "at_midnight"
+        | "at_beginning_of_day" | "at_end_of_day" | "at_noon" | "at_middle_of_day"
+        | "at_beginning_of_hour" | "at_end_of_hour" | "at_beginning_of_minute" | "at_end_of_minute"
+        | "at_beginning_of_week" | "at_end_of_week" | "at_beginning_of_month" | "at_end_of_month"
+        | "at_beginning_of_year" | "at_end_of_year"
+        | "yesterday" | "tomorrow" | "prev_day" | "next_day" | "days_ago" | "days_since"
+        | "weeks_ago" | "weeks_since" | "next_week" | "prev_week" | "last_week"
+        | "prev_month" | "next_month" | "last_month" | "months_ago" | "months_since"
+        | "prev_year" | "next_year" | "last_year" | "years_ago" | "years_since"
         | "change" | "advance" | "ago" | "since" | "from_now"
         | "round" | "floor" | "ceil" | "to_date" | "to_datetime" => time(),
         // `Time - x` is `Time` for a Duration arg but a Float for a
@@ -1579,6 +1599,10 @@ pub(super) fn time_method(method: &Symbol) -> Option<Ty> {
         // gradual `Untyped` (the chains read `.before?`/`/ 60`/`> 1.minute`
         // off the result, all of which absorb Untyped).
         "+" | "-" => Ty::Untyped,
+        "all_day" | "all_week" | "all_month" | "all_year" => Ty::Class {
+            id: ClassId(Symbol::from("Range")),
+            args: vec![time()],
+        },
         // String renderings.
         "iso8601" | "rfc2822" | "rfc3339" | "to_s" | "to_fs" | "to_formatted_s"
         | "strftime" | "httpdate" | "rfc822" | "rfc2822" | "ctime" | "asctime" | "inspect"
@@ -1593,7 +1617,7 @@ pub(super) fn time_method(method: &Symbol) -> Option<Ty> {
         // this arm); the ordered comparisons aren't, so type them here:
         // `created_at >= cutoff` → Bool.
         "<" | ">" | "<=" | ">=" | "between?"
-        | "after?" | "before?" | "past?" | "future?" | "today?"
+        | "after?" | "before?" | "past?" | "future?" | "today?" | "yesterday?" | "tomorrow?"
         | "monday?" | "tuesday?" | "wednesday?" | "thursday?" | "friday?"
         | "saturday?" | "sunday?" | "on_weekend?" | "on_weekday?" => Ty::Bool,
         _ => return None,
@@ -1916,7 +1940,7 @@ pub(super) fn array_method(method: &Symbol, elem: &Ty, block_ret: Option<&Ty>) -
                 value: Box::new(unknown()),
             },
         },
-        "to_a" => Ty::Array { elem: Box::new(elem.clone()) },
+        "to_a" | "deconstruct" => Ty::Array { elem: Box::new(elem.clone()) },
         "join" => Ty::Str,
         // `[0, 0, 0].pack("CCC")` — binary packing (lobsters'
         // confidence_order byte strings).
@@ -1945,6 +1969,8 @@ pub(super) fn record_method(
     args: &[crate::expr::Expr],
 ) -> Ty {
     match method.as_str() {
+        "deconstruct_keys" | "dup" | "clone" => Ty::Record { row: row.clone() },
+        "key?" | "has_key?" | "include?" => Ty::Bool,
         "[]" if args.len() == 1 => {
             // Literal-key bracket access → the field's exact type.
             // Non-literal keys fall through to the value-union form.
@@ -2004,7 +2030,7 @@ pub(super) fn hash_method(
         "to_a" => Ty::Array {
             elem: Box::new(Ty::Tuple { elems: vec![key.clone(), value.clone()] }),
         },
-        "dup" | "clone" => Ty::Hash {
+        "dup" | "clone" | "deconstruct_keys" => Ty::Hash {
             key: Box::new(key.clone()),
             value: Box::new(value.clone()),
         },
@@ -2035,6 +2061,7 @@ pub(super) fn hash_method(
         // from it: the rust fetch bridge already renders the two-arg
         // non-nil form as `.get(k).cloned().unwrap_or(default)` — a
         // `V`, not an `Option` (`emit/rust/expr/send/index.rs:414`).
+
         //
         // The one-arg form raises `KeyError` rather than answering
         // nil, so `value` alone would be right; it stays `value | Nil`
@@ -2365,7 +2392,7 @@ pub(super) fn universal_method(method: &Symbol) -> Option<Ty> {
         "nil?" | "is_a?" | "kind_of?" | "instance_of?" | "respond_to?"
         | "frozen?" | "tainted?" | "untrusted?" => Some(Ty::Bool),
         // Value equality / comparison operators.
-        "==" | "!=" | "eql?" | "equal?" => Some(Ty::Bool),
+        "==" | "===" | "!=" | "eql?" | "equal?" => Some(Ty::Bool),
         // Boolean negation — Ruby's `!x` desugars to `x.!()` and is
         // also written as bare `!cond` (Send recv=None, method="!").
         // Universally returns Bool regardless of receiver.

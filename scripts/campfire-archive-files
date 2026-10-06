@@ -80,6 +80,11 @@ environment to choose the count.
 Signed cookies and links use \`SECRET_KEY_BASE\` when it is set. Otherwise
 a key is generated on first run and kept in \`storage/secret_key_base\`.
 
+Push notifications need \`VAPID_PUBLIC_KEY\` and \`VAPID_PRIVATE_KEY\` in
+the environment (a URL-safe Base64 P-256 pair; \`npx web-push
+generate-vapid-keys\` makes one). Behind a TLS-terminating proxy the app
+takes its URLs' scheme from \`X-Forwarded-Proto\`, as Rails does.
+
 ## End-to-end
 
 Browser tests (Playwright) driving the built binary. The config boots the
@@ -111,18 +116,12 @@ Turbo channel. Each spec names which of the walk's checks it stands for.
   fixtures are stripped (they were 50 MB), so the attachment tests do
   not run from this archive (\`docs/pipeline/runtime.md\` carries the
   entry).
-- **Web push.** Every message you post will print
-
-  \`\`\`
-  [job] a queued job raised: uninitialized constant ThreadPoolExecutor
-  \`\`\`
-
-  on stderr: campfire enqueues a web-push delivery job per message, and
-  the job dies at its thread-pool constructor because the delivery
-  machinery (a keep-alive HTTP client and a \`Concurrent\` thread pool)
-  is not modeled. The job is dropped; the message itself is unaffected —
-  it was already broadcast to the room before the job ran. Expected
-  output, not a crash.
+- **Web push, end to end.** Delivery is implemented (the service worker
+  and manifest are served; each push is encrypted and VAPID-signed
+  byte-for-byte as the web-push gem does it), but a delivery to a real
+  browser push service has not yet been confirmed. campfire deletes a
+  subscription on any OpenSSL error, so after a failed attempt,
+  subscribe again before retrying.
 - **The native test binaries.** The emitted \`test/\` sources ship, but
   \`spin test\` is not wired into this README: several test programs do not
   compile or do not pass today, and a \`## Test\` section that is red is a

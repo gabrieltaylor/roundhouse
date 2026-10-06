@@ -421,6 +421,11 @@ module Rails
       req.nil? ? "localhost" : req.host
     end
 
+    def protocol
+      req = ActionController::Current.request
+      req.nil? ? "http://" : req.protocol
+    end
+
     # Rails' encrypted credentials store, as an EMPTY one.
     #
     # Not a stub standing in for work not done: the store lives in

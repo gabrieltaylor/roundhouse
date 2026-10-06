@@ -1050,6 +1050,16 @@ end
                     file: erb_path.display().to_string(),
                     message: "view path outside views dir".into(),
                 })?;
+            // A handler-less file is named as Rails' resolver sees it —
+            // `pwa/service_worker.js` is `pwa/service_worker.js.raw` —
+            // so name/format parse the same way every template's does.
+            let raw_rel;
+            let rel = if engine == ViewEngine::Raw && !rel.to_string_lossy().ends_with(".raw") {
+                raw_rel = PathBuf::from(format!("{}.raw", rel.display()));
+                raw_rel.as_path()
+            } else {
+                rel
+            };
             if let Some(view) = unwrap_or_record(ingest_template(
                 &source,
                 rel,
@@ -3137,7 +3147,7 @@ fn walk_erb<V: Vfs + ?Sized>(
                 // four coverage gaps.
                 if stem.ends_with(".html")
                     || !stem.contains('.')
-                    || matches!(format, Some("turbo_stream" | "svg" | "text" | "json"))
+                    || matches!(format, Some("turbo_stream" | "svg" | "text" | "json" | "js"))
                     // Feeds: `.rss.builder` / `.atom.builder` (lobsters'
                     // `home/stories.rss.builder`), lowered as
                     // `<action>_rss` beside the html template, the same
@@ -3147,6 +3157,24 @@ fn walk_erb<V: Vfs + ?Sized>(
                     out.push((path, engine));
                 } else {
                     record_skipped_view(&path, &format!("{e} (non-html format)"));
+                }
+            }
+            // A view with a format and NO handler extension renders
+            // through Rails' default `Raw` handler: its bytes, verbatim.
+            // campfire's `pwa/service_worker.js` is one — the service
+            // worker every push subscription registers. Only a name
+            // that can become a method is taken. The `rails new` default
+            // `service-worker.js` is hyphenated and reached only through
+            // Rails' own `Rails::PwaController`, which no app here routes;
+            // it holds no Ruby, so passing it over loses no analysis, and
+            // recording it would put a gap on every default app.
+            Some("js") => {
+                let stem = path.file_stem().and_then(|s| s.to_str()).unwrap_or_default();
+                if !stem.is_empty()
+                    && !stem.contains('.')
+                    && stem.chars().all(|c| c == '_' || c.is_ascii_alphanumeric())
+                {
+                    out.push((path, ViewEngine::Raw));
                 }
             }
             // Template engines we don't ingest yet — they hold Ruby (or are

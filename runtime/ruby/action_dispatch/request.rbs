@@ -66,6 +66,8 @@ module ActionDispatch
     def xhr?: () -> bool
     def fullpath: () -> String
     def original_fullpath: () -> String
+    def ssl?: () -> bool
+    def protocol: () -> String
     def base_url: () -> String
     def original_url: () -> String
     def url: () -> String

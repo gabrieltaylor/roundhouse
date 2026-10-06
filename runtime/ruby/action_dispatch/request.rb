@@ -238,16 +238,19 @@ module ActionDispatch
       fullpath
     end
 
+    def ssl?
+      return true if @env.fetch("HTTPS", "").to_s == "on"
+      forwarded = @env.fetch("HTTP_X_FORWARDED_PROTO", "").to_s
+      forwarded.split(",").first.to_s.strip.downcase == "https"
+    end
+
+    def protocol
+      ssl? ? "https://" : "http://"
+    end
+
     # Scheme + host, no path — what Rails builds absolute URLs from.
-    # The scheme is a read of the one env key that carries it; a
-    # transport that terminates TLS elsewhere (every lane here) reports
-    # http, which is what the CRuby tree's overlay Request reports too.
     def base_url
-      if @env.fetch("HTTPS", "").to_s == "on"
-        "https://" + @host
-      else
-        "http://" + @host
-      end
+      protocol + @host
     end
 
     # Absolute URL of this request. Feed templates interpolate it as

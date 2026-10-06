@@ -615,9 +615,8 @@ pub enum FormBuilderMethod {
 /// `html` is the default. `turbo_stream` joins it because a Turbo form
 /// submission negotiates `text/vnd.turbo-stream.html` and Rails renders
 /// `<action>.turbo_stream.erb` for it — same ERB, different response
-/// format. Other explicit formats (`.text.erb` mailer variants,
-/// `manifest.json.erb`, `show.svg.erb`) stay skipped: their bodies
-/// aren't typed and nothing dispatches to them yet.
+/// format. The `.text.erb` mailer variants stay out (analysis-only):
+/// nothing dispatches to them yet.
 pub fn renders_through_view_path(format: &str) -> bool {
     // `svg` joins them: campfire renders a user's initials as an SVG
     // avatar (`users/avatars/show.svg.erb`). The stem-collision worry
@@ -631,7 +630,11 @@ pub fn renders_through_view_path(format: &str) -> bool {
     // dropped somewhere in between.
     // `rss` / `atom` / `xml`: feed templates (lobsters' `home/stories
     // .rss.builder`), `<action>_rss` beside the html view.
-    matches!(format, "html" | "turbo_stream" | "svg" | "rss" | "atom" | "xml")
+    // `json` / `js`: TEXT templates in those formats — campfire's PWA
+    // `manifest.json.erb` and its raw `service_worker.js` — as
+    // `<action>_json` / `<action>_js`. A jbuilder template is json too,
+    // but it is DSL, not text: `lowers_through_view_path` keeps it out.
+    matches!(format, "html" | "turbo_stream" | "svg" | "rss" | "atom" | "xml" | "json" | "js")
 }
 
 /// Does this view lower to a view-path class? The one filter every
@@ -639,7 +642,7 @@ pub fn renders_through_view_path(format: &str) -> bool {
 /// classes` builds them from exactly this set, so a caller zipping
 /// views against classes must use it too.
 pub fn lowers_through_view_path(v: &crate::dialect::View) -> bool {
-    !v.analysis_only && renders_through_view_path(v.format.as_str())
+    !v.analysis_only && !v.jbuilder && renders_through_view_path(v.format.as_str())
 }
 
 /// A view's output file stem: its name, format-qualified when it is not

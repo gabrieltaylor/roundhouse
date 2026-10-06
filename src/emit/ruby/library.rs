@@ -3059,12 +3059,6 @@ fn rewrite_helper_calls(
         return;
     }
 
-    // Bare `<x>_url` whose `<x>_path` sibling is generated — the
-    // absolute variant grounds to protocol + configured domain + the
-    // path helper (same convention as `rewrite_url_helpers_absolute`'s
-    // host-kwarg form): `"http://#{Rails.application.domain}#{
-    // RouteHelpers.<x>_path(args)}"`. Lobsters' hats page links
-    // `request_hat_url` bare.
     if let ExprNode::Send { recv: None, method, args, block: None, .. } = &*expr.node {
         if let Some(stem) = method.as_str().strip_suffix("_url") {
             let path_name = Symbol::from(format!("{stem}_path"));
@@ -3108,7 +3102,9 @@ fn rewrite_helper_calls(
                 );
                 *expr.node = ExprNode::StringInterp {
                     parts: vec![
-                        crate::expr::InterpPart::Text { value: "http://".to_string() },
+                        crate::expr::InterpPart::Expr {
+                            expr: crate::lower::view_to_library::rails_application_call("protocol"),
+                        },
                         crate::expr::InterpPart::Expr { expr: domain },
                         crate::expr::InterpPart::Expr { expr: path_call },
                     ],
@@ -4866,8 +4862,44 @@ pub(crate) fn apply_time_format_lowering(lcs: &mut [LibraryClass]) {
     for lc in lcs.iter_mut() {
         for m in &mut lc.methods {
             rewrite_rfc2822(&mut m.body);
+            rewrite_time_parse(&mut m.body);
         }
     }
+}
+
+// Not left as `Time.parse`: spinel ships no stdlib `time` (matz/spinel#1118), so it grounds like `rfc2822` above.
+fn rewrite_time_parse(expr: &mut Expr) {
+    expr.node.for_each_child_mut(&mut |c| rewrite_time_parse(c));
+    let ExprNode::Send { recv: Some(r), method, args, block: None, .. } = &mut *expr.node else {
+        return;
+    };
+    if method.as_str() != "parse" || args.len() != 1 {
+        return;
+    }
+    let is_time = |e: &Expr| {
+        matches!(&*e.node, ExprNode::Const { path } if path.len() == 1 && path[0].as_str() == "Time")
+    };
+    let target = if is_time(r) {
+        "parse_time"
+    } else if matches!(&*r.node,
+        ExprNode::Send { recv: Some(z), method, args, block: None, .. }
+            if method.as_str() == "zone" && args.is_empty() && is_time(z))
+    {
+        "zone_parse"
+    } else {
+        return;
+    };
+    let arg = args[0].clone();
+    *expr.node = ExprNode::Send {
+        recv: Some(Expr::new(
+            Span::synthetic(),
+            ExprNode::Const { path: vec![Symbol::from("ActiveSupport")] },
+        )),
+        method: Symbol::from(target),
+        args: vec![arg],
+        block: None,
+        parenthesized: true,
+    };
 }
 
 fn rewrite_rfc2822(expr: &mut Expr) {

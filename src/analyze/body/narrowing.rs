@@ -6,12 +6,6 @@
 //! [`Ctx`]s where the variable's type has been narrowed to reflect
 //! what the condition guarantees.
 //!
-//! Today's predicates cover the nil / class-check family. Negation
-//! is recognized (`!x.nil?`). Multi-clause conditions
-//! (`x.nil? && y.nil?`), guard-clause early returns, and `case`/`when`
-//! narrowing are not yet implemented — each can slot in here when a
-//! case forces them.
-//!
 //! Called from the `If` arm in the body-typer's `compute` match.
 
 use crate::expr::{BoolOpKind, Expr, ExprNode, LValue, Literal};
@@ -71,6 +65,15 @@ pub(super) fn extract_narrowing(cond: &Expr) -> Option<NarrowPred> {
         }
         ExprNode::Send { recv: Some(target), method, args, .. } => {
             match (method.as_str(), args.as_slice()) {
+                ("===", [arg]) => {
+                    let key = var_key(arg)?;
+                    let ExprNode::Const { path } = &*target.node else { return None };
+                    if !matches!(path.last()?.as_str(), "Integer" | "Numeric" | "Float" | "String" | "Symbol" | "NilClass" | "TrueClass" | "FalseClass" | "Array" | "Hash") {
+                        return None;
+                    }
+                    let ty = const_to_ty(target)?;
+                    Some(NarrowPred::IsA(key, ty))
+                }
                 ("nil?", []) => var_key(target).map(NarrowPred::IsNil),
                 ("==", [arg]) if is_nil_lit(arg) => {
                     var_key(target).map(NarrowPred::IsNil)
@@ -276,6 +279,11 @@ pub(crate) fn remove_nil(ty: &Ty) -> Ty {
 /// else returns the narrower type on the assumption the check would
 /// have succeeded (matches Ruby's `is_a?` semantics at run time).
 fn intersect_with(current: &Ty, narrower: &Ty) -> Ty {
+    if matches!((current, narrower),
+        (Ty::Array { .. } | Ty::Tuple { .. }, Ty::Array { .. })
+        | (Ty::Hash { .. } | Ty::Record { .. }, Ty::Hash { .. })) {
+        return current.clone();
+    }
     match current {
         Ty::Union { variants } => {
             // Keep only variants compatible with the narrower type.
@@ -318,4 +326,160 @@ fn remove_variant(current: &Ty, ty: &Ty) -> Ty {
 /// when polymorphism lands.
 fn ty_compatible(a: &Ty, b: &Ty) -> bool {
     a == b
+}
+
+
+pub(super) fn branch_ctx(cond: &Expr, ctx: &Ctx, truthy: bool) -> Ctx {
+    match &*cond.node {
+        ExprNode::BoolOp { op: BoolOpKind::And, left, right, .. } if truthy => {
+            branch_ctx(right, &branch_ctx(left, ctx, true), true)
+        }
+        ExprNode::BoolOp { op: BoolOpKind::Or, left, right, .. } if !truthy => {
+            branch_ctx(right, &branch_ctx(left, ctx, false), false)
+        }
+        ExprNode::BeginRescue { body, rescues, else_branch: None, ensure: None, .. }
+            if rescues.is_empty() => branch_ctx(body, ctx, truthy),
+        ExprNode::Seq { exprs } => {
+            let mut next = ctx.clone();
+            if let Some((last, prefix)) = exprs.split_last() {
+                for e in prefix { export_bindings(e, &mut next); }
+                branch_ctx(last, &next, truthy)
+            } else { next }
+        }
+        _ => {
+            let mut next = ctx.clone();
+            export_bindings(cond, &mut next);
+            match extract_narrowing(cond) {
+                Some(pred) => apply_narrowing(&next, &pred, truthy),
+                None => next,
+            }
+        }
+    }
+}
+
+pub(super) fn export_bindings(expr: &Expr, ctx: &mut Ctx) {
+    match &*expr.node {
+        ExprNode::Lambda { .. } | ExprNode::Let { .. } => {}
+        ExprNode::Assign { target: LValue::Var { name, .. }, value } => {
+            export_bindings(value, ctx);
+            if let Some(ty) = &value.ty { ctx.local_bindings.insert(name.clone(), ty.clone()); }
+        }
+        ExprNode::Send { recv: Some(recv), method, args, block: None, .. }
+            if method.as_str() == "delete" && args.len() == 1 => {
+                expr.node.for_each_child(&mut |child| export_bindings(child, ctx));
+                if let ExprNode::Var { name, .. } = &*recv.node {
+                    let key = match &*args[0].node {
+                        ExprNode::Lit { value: Literal::Sym { value } } => Some(value.clone()),
+                        ExprNode::Lit { value: Literal::Str { value } } => Some(Symbol::from(value.as_str())),
+                        _ => None,
+                    };
+                    if let (Some(key), Some(Ty::Record { row })) = (key, ctx.local_bindings.get_mut(name)) {
+                        row.fields.shift_remove(&key);
+                    }
+                }
+            }
+        ExprNode::If { cond, then_branch, else_branch } => {
+            export_bindings(cond, ctx);
+            let mut yes = ctx.clone();
+            let mut no = ctx.clone();
+            export_bindings(then_branch, &mut yes);
+            export_bindings(else_branch, &mut no);
+            join_bindings(ctx, &yes, &no);
+        }
+        ExprNode::BoolOp { left, right, .. } => {
+            export_bindings(left, ctx);
+            let before = ctx.clone();
+            let mut after = ctx.clone();
+            export_bindings(right, &mut after);
+            join_bindings(ctx, &before, &after);
+        }
+        _ => expr.node.for_each_child(&mut |child| export_bindings(child, ctx)),
+    }
+}
+
+fn join_bindings(ctx: &mut Ctx, left: &Ctx, right: &Ctx) {
+    for name in left.local_bindings.keys().chain(right.local_bindings.keys()) {
+        let a = left.local_bindings.get(name).cloned().unwrap_or(Ty::Nil);
+        let b = right.local_bindings.get(name).cloned().unwrap_or(Ty::Nil);
+        ctx.local_bindings.insert(name.clone(), super::union_of(a, b));
+    }
+}
+
+#[cfg(test)]
+mod pattern_tests {
+    use super::*;
+    use super::super::BodyTyper;
+    use std::collections::HashMap;
+
+    fn typed(source: &str) -> Expr {
+        typed_in(source, &Ctx::default())
+    }
+
+    fn typed_in(source: &str, ctx: &Ctx) -> Expr {
+        let parsed = ruby_prism::parse(source.as_bytes());
+        let node = parsed.node().as_program_node().unwrap().statements().as_node();
+        let mut expr = crate::ingest::ingest_expr(&node, "pattern.rb").unwrap();
+        BodyTyper::new(&HashMap::new()).analyze_expr(&mut expr, ctx);
+        expr
+    }
+
+    fn reads(expr: &Expr, name: &str, out: &mut Vec<Ty>) {
+        if matches!(&*expr.node, ExprNode::Var { name: n, .. } if n.as_str() == name) {
+            out.push(expr.ty.clone().unwrap());
+        }
+        expr.node.for_each_child(&mut |child| reads(child, name, out));
+    }
+
+    #[test]
+    fn class_capture_types_guard_body_and_result() {
+        let expr = typed("case [3]; in [Integer => n] if n > 0; n + 1; else; 0; end");
+        let mut types = vec![];
+        reads(&expr, "n", &mut types);
+        assert!(!types.is_empty());
+        assert!(types.iter().all(|t| *t == Ty::Int), "{types:?}");
+        assert_eq!(expr.ty, Some(Ty::Int));
+    }
+
+    #[test]
+    fn nested_record_binding_retains_nil_and_false() {
+        let expr = typed("case {data: {user: false}}; in {data: {user:}}; user; else; true; end");
+        let mut types = vec![];
+        reads(&expr, "user", &mut types);
+        assert_eq!(types, vec![Ty::Bool]);
+        assert_eq!(expr.ty, Some(Ty::Bool));
+        let expr = typed("case {data: {user: nil}}; in {data: {user:}}; user; end");
+        assert_eq!(expr.ty, Some(Ty::Nil));
+    }
+
+    #[test]
+    fn array_bindings_after_length_checks_keep_element_types() {
+        let expr = typed("case [3,4,5]; in [first,*middle,last]; first + last + middle.length; else; 0; end");
+        assert_eq!(expr.ty, Some(Ty::Int));
+        let expr = typed("case [nil]; in [value]; value; end");
+        assert_eq!(expr.ty, Some(Ty::Nil));
+        let expr = typed("case {a: 3,b: 4}; in {a:,**rest}; a + rest.length; else; 0; end");
+        assert_eq!(expr.ty, Some(Ty::Int));
+    }
+
+    #[test]
+    fn hash_rest_removes_fields_from_a_known_record_shape() {
+        let mut ctx = Ctx::default();
+        ctx.local_bindings.insert(Symbol::from("input"), Ty::Record {
+            row: crate::ty::Row {
+                fields: [(Symbol::from("a"), Ty::Int), (Symbol::from("b"), Ty::Bool)].into_iter().collect(),
+                rest: None,
+            },
+        });
+        let expr = typed_in("case input; in {a:,**rest}; a + rest.length; else; 0; end", &ctx);
+        assert_eq!(expr.ty, Some(Ty::Int));
+        let mut types = vec![];
+        reads(&expr, "rest", &mut types);
+        assert!(types.iter().all(|ty| matches!(ty, Ty::Record { row } if !row.fields.contains_key(&Symbol::from("a")) && row.fields.contains_key(&Symbol::from("b")))), "{types:?}");
+    }
+
+    #[test]
+    fn failed_guard_binding_is_visible_after_case() {
+        let expr = typed("case [3]; in [Integer => n] if false; 1; else; 0; end; n");
+        assert!(matches!(expr.ty, Some(Ty::Int | Ty::Union { .. })), "{:?}", expr.ty);
+    }
 }

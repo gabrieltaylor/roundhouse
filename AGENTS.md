@@ -81,6 +81,9 @@ defect even if the build is green.
   Before opening one: `bin/rh fixture` (the test fixtures are generated,
   not checked in — see below), `cargo test --lib` plus the targeted
   integration test for what you touched, and a test that pins the fix.
+  When removing an error diagnostic, cover emitted execution in
+  `tests/emit_and_run.rs`, because CI's toolchain lanes emit only fixtures
+  and do not exercise constructs absent from them.
   A reported repro with a patch in the issue is welcome; the same patch
   as a PR is better, because the lanes you cannot run will run.
 - **Fixtures are generated.** `fixtures/real-blog` and `fixtures/store`

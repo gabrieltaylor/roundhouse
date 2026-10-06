@@ -32,14 +32,7 @@
 //!     `routes_to_library` refuses to make a parameter out of them.
 //!
 //!     **On the `_url` spelling they are not dropped — they are the
-//!     answer.** `x_url(…, host: h)` renders `"http://#{h}#{x_path(…)}"`,
-//!     the same shape the view lowerer grounds a hostless `_url` with
-//!     (`Rails.application.domain` in place of `h`) and the same one
-//!     `emit::ruby::library::rewrite_url_helpers_absolute` builds for
-//!     the explicit `…routes.url_helpers.x_url(…, host:)` chain.
-//!     Dropping the host here would be the second half of the campfire
-//!     bug rather than its fix: the button that assertion compares
-//!     against holds an ABSOLUTE URL.
+//!     answer.** `x_url(…, host: h)` renders `"#{Rails.application.protocol}#{h}#{x_path(…)}"`,
 //!   * `anchor:` — the fragment. It DOES belong on a path, and
 //!     `routes_to_library` now renders it (`#tag`, after the query
 //!     string, exactly where `path_for` puts it). Four lobsters call
@@ -261,12 +254,18 @@ fn rewrite(expr: &mut Expr, helpers: &std::collections::HashSet<String>) {
     // `rewrite_url_helpers_absolute` already set — Rails'
     // `normalize_protocol` accepts `"https"` and `"https://"` alike and
     // we accept only the first.
+    // Without one, the scheme is the request's, as Rails' `url_for`
+    // takes it — `Rails.application.protocol` carries its own `://`.
     let mut parts: Vec<InterpPart> = Vec::new();
     match protocol {
-        Some(p) => parts.push(InterpPart::Expr { expr: p }),
-        None => parts.push(InterpPart::Text { value: "http".to_string() }),
+        Some(p) => {
+            parts.push(InterpPart::Expr { expr: p });
+            parts.push(InterpPart::Text { value: "://".to_string() });
+        }
+        None => parts.push(InterpPart::Expr {
+            expr: crate::lower::view_to_library::rails_application_call("protocol"),
+        }),
     }
-    parts.push(InterpPart::Text { value: "://".to_string() });
     parts.push(InterpPart::Expr { expr: host });
     parts.push(InterpPart::Expr { expr: path_call });
     *expr.node = ExprNode::StringInterp { parts };
@@ -358,14 +357,5 @@ fn strip_host_options(
     if only_path {
         return None;
     }
-    // `x_url(…, host: h)` names the host EXPLICITLY, and dropping it
-    // would be the second half of the campfire bug rather than its fix:
-    // the copy-link button that assertion compares against holds an
-    // ABSOLUTE URL. The view lowerer already grounds a hostless `_url`
-    // as `"http://#{Rails.application.domain}#{…_path}"`; this is that
-    // shape with the caller's host in place of the default, and it is
-    // what `emit::ruby::library::rewrite_url_helpers_absolute` builds
-    // for the explicit `…routes.url_helpers.x_url(…, host:)` chain.
-    // Two spellings, one rendering.
     Some((stem.to_string(), host?, protocol))
 }
