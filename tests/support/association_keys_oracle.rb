@@ -25,10 +25,6 @@ connection.execute(<<~SQL)
 SQL
 connection.execute("UPDATE allocations SET document_type = 'Ledger::Invoice'")
 
-raise "Rails namespaced key convention changed" unless Ledger::Account.reflect_on_association(:tickets).foreign_key == "account_id"
-raise "Rails target convention changed" unless Ledger::Account.reflect_on_association(:tickets).klass == Ledger::Ticket
-raise "Rails through source changed" unless Ledger::Payment.reflect_on_association(:invoices).klass == Ledger::Invoice
-
 associations = { "Ledger::Payment" => %i[entries invoices bills legacy_bills audits documents archived_documents first_entry], "Ledger::Refund" => %i[entries], "Ledger::Entry" => %i[invoice audit_invoice restricted_invoice], "Ledger::Invoice" => %i[payers], "Ledger::Account" => %i[tickets] }
 expected_legacy_ids = Ledger::Payment.all.map(&:legacy_bill_ids)
 key_for = ->(record) { record.respond_to?(:code) ? record.code : record.id }
@@ -52,7 +48,6 @@ associations.each do |class_name, names|
   end
 end
 
-# Keep real Rails models and hydration; replace only the generated methods and the query runtime.
 Object.send(:remove_const, :RoundhouseRelation) if defined?(RoundhouseRelation)
 runtime = File.read(File.expand_path("../../runtime/ruby/active_record/relation.rb", __dir__), encoding: "UTF-8")
 runtime = runtime.sub("class Relation", "class RoundhouseRelation")

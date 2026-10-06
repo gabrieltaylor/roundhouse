@@ -758,7 +758,6 @@ fn extension_relation_method(name: &str) -> bool {
     )
 }
 
-/// has_one reader — the scoped has_many query narrowed to one row.
 fn synth_has_one_reader(
     owner: &ClassId,
     name: &Symbol,

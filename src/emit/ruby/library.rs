@@ -6487,9 +6487,6 @@ mod preload_tests {
     }
 }
 
-/// `return @<name>_cache if @<name>_loaded` — the same guard shape the
-/// has_many readers carry, so preloaded and lazy
-/// reads share one cache contract.
 fn preload_cache_guard(name: &Symbol) -> Expr {
     let span = Span::synthetic;
     Expr::new(

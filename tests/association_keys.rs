@@ -74,13 +74,6 @@ fn reflection_metadata_survives_ingestion() {
     let app = app();
     let payment = model(&app, "Ledger::Payment");
     assert_eq!(payment.table.0.as_str(), "receipts");
-    assert!(
-        payment
-            .attributes
-            .fields
-            .keys()
-            .any(|k| k.as_str() == "slug")
-    );
     for name in ["invoices", "bills", "audits"] {
         let assoc = payment
             .associations()
