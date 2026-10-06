@@ -219,7 +219,6 @@ module ActiveSupport
     parse_fields(str, true)
   end
 
-  # Not `Date._parse`'s every shape: a string outside these forms raises rather than parse to a different instant.
   def self.parse_fields(str, in_zone)
     raise TypeError, "no implicit conversion of nil into String" if str.nil?
     s = str.strip
@@ -242,7 +241,6 @@ module ActiveSupport
     raise ArgumentError, "unsupported time format: #{str.inspect}"
   end
 
-  # -1 marks a missing date part, filled from `now` the way ActiveSupport's `parts_to_time` does.
   def self.build_time(in_zone, year, mon, mday, hour_s, min_s, sec_s, frac, zone)
     now = ActiveSupport.now
     y = year < 0 ? now.year : year

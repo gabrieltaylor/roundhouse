@@ -6,9 +6,6 @@
 //! [`Ctx`]s where the variable's type has been narrowed to reflect
 //! what the condition guarantees.
 //!
-//! Negation and short-circuit conditions compose these predicates.
-//! Guard-clause early returns and `case`/`when` narrowing remain separate.
-//!
 //! Called from the `If` arm in the body-typer's `compute` match.
 
 use crate::expr::{BoolOpKind, Expr, ExprNode, LValue, Literal};

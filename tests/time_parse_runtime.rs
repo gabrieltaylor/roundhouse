@@ -14,10 +14,6 @@ fn run_driver(implementation: &str) {
     let stdout = String::from_utf8_lossy(&out.stdout);
     let stderr = String::from_utf8_lossy(&out.stderr);
     assert!(
-        stdout.contains("cases "),
-        "driver failed before checking anything\n=== stdout ===\n{stdout}\n=== stderr ===\n{stderr}"
-    );
-    assert!(
         stdout.contains("ALL OK") && out.status.success(),
         "{implementation} diverged from activesupport\n=== stdout ===\n{stdout}\n=== stderr ===\n{stderr}"
     );

@@ -33,13 +33,6 @@
 //!
 //!     **On the `_url` spelling they are not dropped — they are the
 //!     answer.** `x_url(…, host: h)` renders `"#{Rails.application.protocol}#{h}#{x_path(…)}"`,
-//!     the same shape the view lowerer grounds a hostless `_url` with
-//!     (`Rails.application.domain` in place of `h`) and the same one
-//!     `emit::ruby::library::rewrite_url_helpers_absolute` builds for
-//!     the explicit `…routes.url_helpers.x_url(…, host:)` chain.
-//!     Dropping the host here would be the second half of the campfire
-//!     bug rather than its fix: the button that assertion compares
-//!     against holds an ABSOLUTE URL.
 //!   * `anchor:` — the fragment. It DOES belong on a path, and
 //!     `routes_to_library` now renders it (`#tag`, after the query
 //!     string, exactly where `path_for` puts it). Four lobsters call
@@ -364,14 +357,5 @@ fn strip_host_options(
     if only_path {
         return None;
     }
-    // `x_url(…, host: h)` names the host EXPLICITLY, and dropping it
-    // would be the second half of the campfire bug rather than its fix:
-    // the copy-link button that assertion compares against holds an
-    // ABSOLUTE URL. The view lowerer already grounds a hostless `_url`
-    // as `"#{Rails.application.protocol}#{Rails.application.domain}#{…_path}"`; this is that
-    // shape with the caller's host in place of the default, and it is
-    // what `emit::ruby::library::rewrite_url_helpers_absolute` builds
-    // for the explicit `…routes.url_helpers.x_url(…, host:)` chain.
-    // Two spellings, one rendering.
     Some((stem.to_string(), host?, protocol))
 }

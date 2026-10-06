@@ -125,15 +125,6 @@ fn a_non_route_helper_is_untouched() {
     );
 }
 
-/// The `_url` spelling is the other half of the rule, and it is not a
-/// strip: `host:` IS the host of the URL it asks for.
-///
-/// campfire's assertion compares a copy-link button — which holds
-/// `"#{Rails.application.protocol}#{Rails.application.domain}#{…_path}"`, the view lowerer's
-/// grounding of a hostless `_url` — against
-/// `room_at_message_url(@room, msg, host: "once.campfire.test")`.
-/// Dropping the host would leave a bare path on one side of that
-/// comparison and an absolute URL on the other.
 #[test]
 fn a_url_with_a_host_becomes_an_absolute_url() {
     let out = lowered_views(

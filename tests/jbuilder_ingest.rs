@@ -9,9 +9,6 @@ use roundhouse::ingest::ingest_app;
 fn real_blog_jbuilder_views_ingested() {
     let app = ingest_app(roundhouse::fixtures::real_blog()).expect("ingest");
 
-    // `pwa/manifest.json.erb` is a json-format view too, but TEXT: it
-    // lowers through the view walker, and only the jbuilder templates
-    // carry the flag.
     let json_views: Vec<_> = app
         .views
         .iter()

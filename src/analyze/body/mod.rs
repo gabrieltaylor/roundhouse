@@ -3022,7 +3022,6 @@ fn never_falsy(ty: &Ty) -> bool {
     }
 }
 
-// Not the `(str, now)` form: only one argument is grounded to `ActiveSupport.parse_time` / `zone_parse`.
 fn time_parse_ty(recv: &Expr, method: &Symbol, args: &[Expr]) -> Option<Ty> {
     if method.as_str() != "parse" || args.len() != 1 {
         return None;

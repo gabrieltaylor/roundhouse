@@ -198,8 +198,6 @@ mod tests {
         }
     }
 
-    /// campfire's direct-room sidebar: `presence || [user]` types
-    /// `Array | untyped`, and the Array half has no `many?` on spinel.
     #[test]
     fn many_on_an_array_or_untyped_union_is_a_size_test() {
         let mut e = many_on(Ty::Union { variants: vec![array_of_users(), Ty::Untyped] });
@@ -210,7 +208,6 @@ mod tests {
         assert_eq!(e.ty, Some(Ty::Bool));
     }
 
-    /// A plain Array still takes the module function.
     #[test]
     fn many_on_an_array_grounds_to_the_module_function() {
         let mut e = many_on(array_of_users());
@@ -220,7 +217,6 @@ mod tests {
         assert!(matches!(&*r.node, ExprNode::Const { path } if path[0].as_str() == "ActiveSupport"));
     }
 
-    /// A union with a variant that has no `size` (nil) is left alone.
     #[test]
     fn many_on_a_nilable_array_union_is_untouched() {
         let mut e = many_on(Ty::Union { variants: vec![array_of_users(), Ty::Nil] });

@@ -170,7 +170,6 @@ module ActiveSupport
     Time.parse(str, ActiveSupport.now)
   end
 
-  # Not `Time.parse`: ActiveSupport's `TimeZone#parse` answers nil for no date and lands an offset in the app's zone.
   def self.zone_parse(str)
     parts = Date._parse(str, false)
     return nil if parts.empty?

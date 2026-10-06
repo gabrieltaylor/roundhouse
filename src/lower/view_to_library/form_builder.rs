@@ -1940,8 +1940,6 @@ fn rails_domain_expr() -> Expr {
     super::rails_application_call("domain")
 }
 
-/// `Rails.application.protocol` — the scheme half, the request's
-/// (`https://` behind a TLS-terminating proxy).
 fn rails_protocol_expr() -> Expr {
     super::rails_application_call("protocol")
 }

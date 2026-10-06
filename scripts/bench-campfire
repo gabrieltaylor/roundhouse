@@ -875,9 +875,7 @@ login_cookie() {
                 || { fail "$lane sign-in failed"; return 1; }
             ;;
         ruby|ruby-1p|spinel|spinel-1p|jruby|truffleruby)
-            # The emitted tree verifies campfire's `protect_from_forgery
-            # with: :exception` (09567dd7), so the token comes from the
-            # lane's own form, under the session cookie that holds it.
+            # The CSRF token must come from the lane's own form and session cookie.
             local token code
             token="$(curl -sS -c "$jar" "http://127.0.0.1:$port/session/new" \
                      | grep -o 'name="authenticity_token" value="[^"]*"' | head -1 \

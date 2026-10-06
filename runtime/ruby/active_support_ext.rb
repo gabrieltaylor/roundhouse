@@ -244,7 +244,6 @@ module ActiveSupport
     "#{head}, and #{list[n - 1]}"
   end
 
-  # Not reopened on `Time` (no built-in reopening), and not `Time#+`: day shifts go through the civil calendar so DST cannot move the clock.
   def self.civil_days(y, m, d)
     yy = m <= 2 ? y - 1 : y
     era = yy / 400
@@ -294,7 +293,6 @@ module ActiveSupport
     days_since(t, -7 * n)
   end
 
-  # Not a day shift: ActiveSupport clamps to the target month's last day (Jan 31 + 1 month is Feb 28).
   def self.months_since(t, n = 1)
     total = t.year * 12 + t.month - 1 + n
     y = total / 12
@@ -344,7 +342,6 @@ module ActiveSupport
     Time.local(t.year, t.month, t.day, 12)
   end
 
-  # Not Sunday: `Date.beginning_of_week` defaults to Monday.
   def self.beginning_of_week(t)
     local_on(civil_days(t.year, t.month, t.day) - (t.wday + 6) % 7, 0, 0, 0, 0)
   end
@@ -381,7 +378,6 @@ module ActiveSupport
     a.year == b.year && a.month == b.month && a.day == b.day
   end
 
-  # Not `ActiveSupport.now` read here: the caller passes it, since this file's typing sees no clock of its own.
   def self.today?(t, now)
     same_day?(t, now)
   end

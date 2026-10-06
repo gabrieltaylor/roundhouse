@@ -3998,10 +3998,6 @@ end
     assert_eq!(ty("form.object.try(:name)", 12), "String?");
 }
 
-/// `.text.erb` templates are ingested for the analyzer (their Ruby
-/// types, the IDE sees them) and dropped before lowering. A `.json.erb`
-/// is not: it lowers through the view path as `<action>_json` (campfire's
-/// PWA manifest), and is no jbuilder.
 #[test]
 fn text_erb_templates_are_analysis_only_and_json_erb_is_rendered() {
     let mut app = app_from_files(&[

@@ -101,14 +101,6 @@ pub fn apply_sti_scope_lowering(app: &mut App) {
     // dead weight on every target, and on the strict ones it is dead
     // weight that still has to type-check.
     let mut recast: HashSet<ClassId> = HashSet::new();
-    // Inside a subclass's OWN class method the receiver is implicit:
-    // campfire's `Rooms::Direct.find_for` writes `all.joins(:users)
-    // .detect { … }`, and Rails scopes that `all` to the subclass. Left
-    // bare, it resolved to the base's and searched EVERY room, so the
-    // open room both users belong to matched "the direct room with
-    // exactly these members" — starting a DM redirected into it and no
-    // direct room was ever created (found on the Fly deploy). Naming the
-    // subclass here hands the call to the rewrite below.
     for lc in &mut app.library_classes {
         if !bases.contains_key(&lc.name) {
             continue;

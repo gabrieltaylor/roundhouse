@@ -167,11 +167,6 @@ end
 
 # ── sign in ───────────────────────────────────────────────────────────
 puts "\n\e[1;34m==>\e[0m sign in"
-# Both sign-in pages render campfire's `translation_button`: a <details>
-# whose <summary> is the globe icon and whose popup is the language
-# list. The two are sibling tag captures joined by `+`, and spinel once
-# evaluated the right one first (matz/spinel#5574) — the summary held
-# the whole list, an undismissable overlay on the deployed page.
 def check_translation_button(body)
   summary = body.to_s[%r{<summary class="btn"[^>]*>(.*?)</summary>}m, 1].to_s
   check("the translate button's summary is the globe icon", summary.include?("globe"), true)
@@ -211,24 +206,11 @@ signed  = tag[/signed-stream-name="([^"]+)"/, 1]
 # The app routed the subscription AWAY from the stock channel on purpose.
 check("the page names the app's own channel", channel, "RoomMessagesChannel")
 
-# ── behind a TLS-terminating proxy ────────────────────────────────────
-#
-# A deploy behind Fly / a load balancer reaches the app over plain http
-# with `X-Forwarded-Proto: https`. Rails builds every absolute URL with
-# the REQUEST's scheme, so the room's refresh URL is https there; a
-# literal `http://` was mixed content on the https page and the browser
-# blocked the room's catch-up fetch (found on the first Fly deploy).
 puts "\n\e[1;34m==>\e[0m behind a TLS-terminating proxy"
 proxied = req("GET", "/rooms/1", headers: { "X-Forwarded-Proto" => "https" })
 refresh = proxied.body.to_s[/data-refresh-room-url-value="([^"]+)"/, 1].to_s
 check("the room's refresh URL takes the proxy's scheme", refresh[%r{\A[a-z]+://}], "https://")
 
-# ── the PWA endpoints ─────────────────────────────────────────────────
-#
-# The notification bell registers `/service-worker.js` before it asks for
-# permission; an empty 204 there fails the registration silently and no
-# push subscription can start. The layout links the manifest as
-# `webmanifest_path(format: :json)`.
 puts "\n\e[1;34m==>\e[0m the PWA endpoints"
 sw = req("GET", "/service-worker.js", accept: "*/*")
 check("GET /service-worker.js", sw.code, "200")
@@ -240,20 +222,9 @@ check("the manifest is served as JSON", manifest["content-type"].to_s[/\A[^;]+/]
 manifest_name = (JSON.parse(manifest.body.to_s)["name"] rescue nil)
 check("the manifest parses and names the app", manifest_name.is_a?(String) && !manifest_name.empty?, true)
 
-# ── a direct room in the sidebar ──────────────────────────────────────
-#
-# The sidebar's direct-room partial asks `members.many?` of
-# `room.users.without(user).presence || [user]` — a Relation or an Array.
-# The Array half had no `many?` on spinel, and every sidebar render with
-# a direct room 500'd on the deployed binary. Creating one (with user 2
-# on a seeded tree; alone, on a fresh one — the Array branch) and
-# rendering the sidebar exercises both.
 puts "\n\e[1;34m==>\e[0m a direct room in the sidebar"
 direct = req("POST", "/rooms/directs", { "user_ids[]" => "2" })
 check("POST /rooms/directs", direct.code, "302")
-# `Rooms::Direct.find_for` searches `all` — the DIRECT rooms. Unscoped,
-# the open room 1 (whose members can be exactly these users) matched,
-# and starting a DM landed there instead of in a direct room.
 check("starting a DM does not land in the open room",
       direct["location"].to_s.end_with?("/rooms/1"), false)
 sidebar = req("GET", "/users/me/sidebar")

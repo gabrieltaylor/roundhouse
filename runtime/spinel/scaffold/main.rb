@@ -178,11 +178,6 @@ module Main
     path.start_with?("/assets/") || path == "/icon.png" || path == "/icon.svg"
   end
 
-  # Rails' ActionDispatch::Static: a GET/HEAD for a file that exists
-  # under public/ (robots.txt, the error pages) is served ahead of the
-  # routes. Only a path whose last segment names a file (has an
-  # extension) is looked up, so a route like `/rooms` never stats the
-  # disk; the `..` guard is static_asset?'s.
   def self.public_file?(verb, path)
     return false unless verb == "GET" || verb == "HEAD"
     return false if path.include?("..")
@@ -375,7 +370,6 @@ module Main
     request_format = :json if path_format == "json"
     request_format = :turbo_stream if path_format == "turbo_stream"
     request_format = :rss if path_format == "rss"
-    # `/service-worker.js`: campfire's raw service-worker template.
     request_format = :js if path_format == "js"
     # A route-forced format (`get "/rss" => "home#index", :format => "rss"`)
     # overrides the path-suffix sniff above — the URL carries no extension
@@ -433,9 +427,6 @@ module Main
     # is a valid poly-member write and never constructs the competing hash.
     user_agent = req.req_headers.fetch("user-agent", "")
     request_obj.env["HTTP_USER_AGENT"] = user_agent
-    # The scheme a TLS-terminating proxy (Fly, a load balancer) saw;
-    # `Request#ssl?` reads it, and every absolute URL's `https://`
-    # depends on it.
     request_obj.env["HTTP_X_FORWARDED_PROTO"] = req.req_headers.fetch("x-forwarded-proto", "")
     # …AND the reader, which is a DIFFERENT slot. The overlay twin's
     # `user_agent` reads `@env["HTTP_USER_AGENT"]`; the shared runtime's

@@ -8,8 +8,6 @@
 #[path = "support/emit_and_run.rs"]
 mod emit_and_run;
 
-/// The harness itself: the unedited blog emits and its controller
-/// suite, which renders every page, passes.
 #[test]
 fn the_unedited_blog_runs() {
     emit_and_run::real_blog()
@@ -17,11 +15,6 @@ fn the_unedited_blog_runs() {
         .assert_passes();
 }
 
-/// #139 typed `Model.human_attribute_name` as a String, which took the
-/// call from an error to clean, but no runtime defines it, so every
-/// page rendering the form raises `undefined method
-/// 'human_attribute_name' for class Article`. It belongs once, in
-/// `runtime/ruby/active_record/base.rb`, where every target gets it.
 #[test]
 #[ignore = "check is clean but the emitted view raises NoMethodError: no runtime defines human_attribute_name (#147)"]
 fn human_attribute_name_runs() {
@@ -35,13 +28,6 @@ fn human_attribute_name_runs() {
         .assert_passes();
 }
 
-/// #140 bound `form_with builder: X`'s block param to `X`, which took a
-/// custom builder's own helpers from errors to clean. But the emitted
-/// tree cannot load `X` (no runtime `ActionView::Helpers::FormBuilder`
-/// to subclass), and the view calls `form.marker_field` on a `form`
-/// that no longer exists, because lowering expands the stock builder
-/// inline. Passing needs a builder the emitted view can call; until
-/// then, the honest state is an error in `check`.
 #[test]
 #[ignore = "check is clean but the emitted tree fails to load: no runtime FormBuilder, and the inlined form has no builder object (#148)"]
 fn a_custom_form_builder_runs() {

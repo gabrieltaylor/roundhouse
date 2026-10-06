@@ -1,38 +1,7 @@
-//! Emit-and-run: the half of a claim that a diagnostic count cannot make.
-//!
-//! A change that makes an error diagnostic go away is a claim that the
-//! construct is now *supported*, and supported means the emitted program
-//! runs, not merely that `check` is quiet. `Model.human_attribute_name`
-//! (#139) is the example that motivated this file: typing it as a String
-//! took `check` to 0 errors while the emitted view raised
-//! `undefined method 'human_attribute_name' for class Article`, because
-//! no runtime defined it. Before the change it was an error, which this
-//! project reads as "not supported yet"; after, it was silently broken.
-//!
 //! This harness takes the real-blog fixture, applies a few edits (an
 //! overlay), and then does what a user of the output would: runs
 //! `check`'s error gate, emits the Ruby target, and runs one of the
 //! emitted test files with CRuby.
-//!
-//! ```ignore
-//! #[path = "support/emit_and_run.rs"]
-//! mod emit_and_run;
-//!
-//! emit_and_run::real_blog()
-//!     .edit(
-//!         "app/views/articles/_form.html.erb",
-//!         "<%= form.label :title %>",
-//!         "<%= Article.human_attribute_name(:title) %>",
-//!     )
-//!     .run_test("test/controllers/articles_controller_test.rb")
-//!     .assert_passes();
-//! ```
-//!
-//! The real-blog controller tests render every page, so an edit to a
-//! view, a controller, or a model is exercised by
-//! `articles_controller_test.rb` with no new test to write. When the
-//! construct needs a probe of its own, `run_ruby` boots the emitted app
-//! (`main.rb`, SQLite in memory) and runs a script against it.
 //!
 //! Requires `ruby` with the `sqlite3` gem, the same prerequisite as
 //! generating the fixture. It does not skip when they are absent: a
@@ -56,7 +25,6 @@ use roundhouse::project::BuildTarget;
 /// (440 MB between them) that the benchmark scripts leave behind.
 const SKIP: &[&str] = &["tmp", "log", "storage", "node_modules", ".git"];
 
-/// Start from `fixtures/real-blog`.
 pub fn real_blog() -> Overlay {
     Overlay { base: roundhouse::fixtures::real_blog().to_path_buf(), edits: Vec::new() }
 }
@@ -122,8 +90,6 @@ impl Overlay {
         Run::new("ruby -e <script>".into(), emitted, errors, output)
     }
 
-    /// Copy the fixture, apply the edits, analyze, and write the Ruby
-    /// target. Returns the emitted tree and `check`'s error diagnostics.
     fn emit(self) -> (PathBuf, Vec<String>) {
         let scratch = scratch_dir();
         let source = scratch.join("app");
@@ -166,11 +132,9 @@ impl Overlay {
     }
 }
 
-/// What one emit-and-run produced.
 pub struct Run {
     command: String,
     pub emitted: PathBuf,
-    /// `check`'s error diagnostics for the overlaid app.
     pub errors: Vec<String>,
     pub success: bool,
     pub stdout: String,
@@ -209,7 +173,6 @@ impl Run {
     }
 }
 
-/// `ruby`, with the prerequisite checked once and named on failure.
 fn ruby() -> Command {
     static CHECKED: std::sync::Once = std::sync::Once::new();
     CHECKED.call_once(|| {
